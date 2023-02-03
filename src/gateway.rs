@@ -65,7 +65,7 @@ impl Runtime for OutboundGatewayRuntime {
         }
 
         // Echo the executed command and its arguments
-        let started = tokio::process::Command::new("/bin/echo")
+        let started = tokio::process::Command::new("/usr/bin/ping")
             .arg(command.bin)
             .args(command.args)
             .stdout(Stdio::piped())
