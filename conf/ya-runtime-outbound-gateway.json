@@ -18,6 +18,11 @@
           "name": "out-network-traffic",
           "description": "Outgoing network traffic usage in KB/s",
           "price": true
+        },
+        "golem.usage.duration_sec": {
+          "name": "duration",
+          "description": "Duration",
+          "price": true
         }
       }
     }
