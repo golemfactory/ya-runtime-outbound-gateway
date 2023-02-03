@@ -5,6 +5,21 @@
     "supervisor-path": "exe-unit",
     "runtime-path": "ya-runtime-outbound-gateway/ya-runtime-outbound-gateway",
     "description": "Outbound network traffic gateway",
-    "extra-args": ["--runtime-managed-image"]
+    "extra-args": ["--runtime-managed-image"],
+    "properties": {},
+    "config": {
+      "counters": {
+        "golem.usage.network.in": {
+          "name": "in-network-traffic",
+          "description": "Incoming network traffic usage in KB/s",
+          "price": true
+        },
+        "golem.usage.network.out": {
+          "name": "out-network-traffic",
+          "description": "Outgoing network traffic usage in KB/s",
+          "price": true
+        }
+      }
+    }
   }
 ]

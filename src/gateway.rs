@@ -44,7 +44,7 @@ impl Runtime for OutboundGatewayRuntime {
                 "exampleProperty": "running",
             })))
         }
-            .boxed_local()
+        .boxed_local()
     }
 
     fn stop<'a>(&mut self, _: &mut Context<Self>) -> EmptyResponse<'a> {
@@ -85,4 +85,3 @@ impl Runtime for OutboundGatewayRuntime {
 
     // Remaining trait functions have default implementations
 }
-
