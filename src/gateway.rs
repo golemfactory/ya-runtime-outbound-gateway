@@ -41,7 +41,7 @@ impl Runtime for OutboundGatewayRuntime {
     fn start<'a>(&mut self, _: &mut Context<Self>) -> OutputResponse<'a> {
         async move {
             Ok(Some(serialize::json::json!({
-                "exampleProperty": "running",
+                "state": "running",
             })))
         }
         .boxed_local()
@@ -64,10 +64,16 @@ impl Runtime for OutboundGatewayRuntime {
             return Error::response("Command mode is not supported");
         }
 
+        if command.bin != "test" {
+            return Error::response(format!(
+                "Only `test` command supported. Provided: command: `{}`, args: `{:?}`",
+                command.bin, command.args
+            ));
+        }
+
         // Echo the executed command and its arguments
-        let started = tokio::process::Command::new("/usr/bin/ping")
-            .arg(command.bin)
-            .args(command.args)
+        let started = tokio::process::Command::new("echo")
+            .args(&["Test: Executing echo command on Provider machine - passed"])
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .stdin(Stdio::null())
