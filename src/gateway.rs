@@ -1,15 +1,18 @@
 use futures::FutureExt;
 use serde::{Deserialize, Serialize};
 use structopt::StructOpt;
+use url::Url;
 
 use ya_runtime_sdk::error::Error;
+use ya_runtime_sdk::server::ContainerEndpoint;
 use ya_runtime_sdk::*;
 
 #[derive(StructOpt)]
 #[structopt(rename_all = "kebab-case")]
 pub struct GatewayCli {
-    #[allow(unused)]
-    path: Option<std::path::PathBuf>,
+    /// VPN endpoint address
+    #[structopt(long)]
+    vpn_endpoint: Option<Url>,
 }
 
 #[derive(Default, Deserialize, Serialize)]
@@ -20,7 +23,9 @@ pub struct GatewayConf {
 #[derive(Default, RuntimeDef)]
 #[cli(GatewayCli)]
 #[conf(GatewayConf)]
-pub struct OutboundGatewayRuntime;
+pub struct OutboundGatewayRuntime {
+    pub vpn: Option<ContainerEndpoint>,
+}
 
 impl Runtime for OutboundGatewayRuntime {
     fn deploy<'a>(&mut self, _: &mut Context<Self>) -> OutputResponse<'a> {
@@ -38,11 +43,20 @@ impl Runtime for OutboundGatewayRuntime {
         async move { Ok(None) }.boxed_local()
     }
 
-    fn start<'a>(&mut self, _: &mut Context<Self>) -> OutputResponse<'a> {
+    fn start<'a>(&mut self, ctx: &mut Context<Self>) -> OutputResponse<'a> {
+        let _emitter = ctx
+            .emitter
+            .clone()
+            .expect("Service not running in Server mode");
+
+        let _workdir = ctx.cli.workdir.clone().expect("Workdir not provided");
+        let vpn_endpoint = ctx.cli.runtime.vpn_endpoint.clone();
+
         async move {
-            Ok(Some(serialize::json::json!({
-                "state": "running",
-            })))
+            if let Some(vpn_endpoint) = vpn_endpoint {
+                let _endpoint = ContainerEndpoint::try_from(vpn_endpoint).map_err(Error::from)?;
+            }
+            Ok(None)
         }
         .boxed_local()
     }
@@ -89,5 +103,24 @@ impl Runtime for OutboundGatewayRuntime {
         })
     }
 
-    // Remaining trait functions have default implementations
+    fn offer<'a>(&mut self, _ctx: &mut Context<Self>) -> OutputResponse<'a> {
+        async move {
+            Ok(Some(serde_json::json!({
+                "properties": {
+                    "golem.runtime.capabilities": ["vpn", "manifest-support", "net-gateway"]
+                },
+                "constraints": ""
+            })))
+        }
+        .boxed_local()
+    }
+
+    /// Join a VPN network
+    fn join_network<'a>(
+        &mut self,
+        _network: CreateNetwork,
+        _ctx: &mut Context<Self>,
+    ) -> EndpointResponse<'a> {
+        async move { Err(Error::from_string("Not supported")) }.boxed_local()
+    }
 }
