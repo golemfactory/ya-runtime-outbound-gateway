@@ -1,4 +1,5 @@
 mod gateway;
+mod routing;
 
 use gateway::OutboundGatewayRuntime;
 

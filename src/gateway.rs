@@ -7,6 +7,8 @@ use ya_runtime_sdk::error::Error;
 use ya_runtime_sdk::server::ContainerEndpoint;
 use ya_runtime_sdk::*;
 
+use crate::routing::RoutingTable;
+
 #[derive(StructOpt)]
 #[structopt(rename_all = "kebab-case")]
 pub struct GatewayCli {
@@ -20,11 +22,12 @@ pub struct GatewayConf {
     value: usize,
 }
 
-#[derive(Default, RuntimeDef)]
+#[derive(Default, RuntimeDef, Clone)]
 #[cli(GatewayCli)]
 #[conf(GatewayConf)]
 pub struct OutboundGatewayRuntime {
     pub vpn: Option<ContainerEndpoint>,
+    pub routing: RoutingTable,
 }
 
 impl Runtime for OutboundGatewayRuntime {
@@ -50,15 +53,20 @@ impl Runtime for OutboundGatewayRuntime {
             .expect("Service not running in Server mode");
 
         let _workdir = ctx.cli.workdir.clone().expect("Workdir not provided");
-        let vpn_endpoint = ctx.cli.runtime.vpn_endpoint.clone();
 
-        async move {
-            if let Some(vpn_endpoint) = vpn_endpoint {
-                let _endpoint = ContainerEndpoint::try_from(vpn_endpoint).map_err(Error::from)?;
+        let endpoint = ctx.cli.runtime.vpn_endpoint.clone();
+        let endpoint = match endpoint.map(|vpn_endpoint| ContainerEndpoint::try_from(vpn_endpoint))
+        {
+            Some(Ok(endpoint)) => endpoint,
+            Some(Err(e)) => return Error::response(format!("Failed to parse VPN endpoint: {e}")),
+            None => {
+                return Error::response("Start command expects VPN endpoint, but None was found.")
             }
-            Ok(None)
-        }
-        .boxed_local()
+        };
+
+        self.vpn = Some(endpoint);
+
+        async move { Ok(None) }.boxed_local()
     }
 
     fn stop<'a>(&mut self, _: &mut Context<Self>) -> EmptyResponse<'a> {
@@ -118,9 +126,17 @@ impl Runtime for OutboundGatewayRuntime {
     /// Join a VPN network
     fn join_network<'a>(
         &mut self,
-        _network: CreateNetwork,
+        network: CreateNetwork,
         _ctx: &mut Context<Self>,
     ) -> EndpointResponse<'a> {
-        async move { Err(Error::from_string("Not supported")) }.boxed_local()
+        let routing = self.routing.clone();
+        let endpoint = self.vpn.clone();
+        async move {
+            routing.update_network(network).await?;
+            Ok(endpoint.ok_or_else(|| {
+                Error::from_string("VPN ExeUnit - Runtime communication endpoint not set")
+            })?)
+        }
+        .boxed_local()
     }
 }
