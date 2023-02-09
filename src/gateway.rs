@@ -1,5 +1,6 @@
 use futures::FutureExt;
 use serde::{Deserialize, Serialize};
+use std::process::Stdio;
 use structopt::StructOpt;
 use url::Url;
 
@@ -18,9 +19,7 @@ pub struct GatewayCli {
 }
 
 #[derive(Default, Deserialize, Serialize)]
-pub struct GatewayConf {
-    value: usize,
-}
+pub struct GatewayConf {}
 
 #[derive(Default, RuntimeDef, Clone)]
 #[cli(GatewayCli)]
@@ -32,6 +31,8 @@ pub struct OutboundGatewayRuntime {
 
 impl Runtime for OutboundGatewayRuntime {
     fn deploy<'a>(&mut self, _: &mut Context<Self>) -> OutputResponse<'a> {
+        log::info!("Running `Deploy` command");
+
         // SDK will auto-generate the following code:
         //
         // async move {
@@ -47,12 +48,16 @@ impl Runtime for OutboundGatewayRuntime {
     }
 
     fn start<'a>(&mut self, ctx: &mut Context<Self>) -> OutputResponse<'a> {
+        log::info!("Running `Start` command");
+
         let _emitter = ctx
             .emitter
             .clone()
             .expect("Service not running in Server mode");
 
         let _workdir = ctx.cli.workdir.clone().expect("Workdir not provided");
+
+        log::debug!("VPN endpoint: {:?}", ctx.cli.runtime.vpn_endpoint);
 
         let endpoint = ctx.cli.runtime.vpn_endpoint.clone();
         let endpoint = match endpoint.map(|vpn_endpoint| ContainerEndpoint::try_from(vpn_endpoint))
@@ -64,9 +69,14 @@ impl Runtime for OutboundGatewayRuntime {
             }
         };
 
+        log::info!("VPN endpoint: {endpoint}");
         self.vpn = Some(endpoint);
 
-        async move { Ok(None) }.boxed_local()
+        async move {
+            //endpoint.connect(cep).await?;
+            Ok(None)
+        }
+        .boxed_local()
     }
 
     fn stop<'a>(&mut self, _: &mut Context<Self>) -> EmptyResponse<'a> {
@@ -80,7 +90,7 @@ impl Runtime for OutboundGatewayRuntime {
         mode: RuntimeMode,
         ctx: &mut Context<Self>,
     ) -> ProcessIdResponse<'a> {
-        use std::process::Stdio;
+        log::info!("Running `Run` command with params: {command:?} mode: {mode:?}");
 
         if let RuntimeMode::Command = mode {
             return Error::response("Command mode is not supported");
@@ -112,6 +122,7 @@ impl Runtime for OutboundGatewayRuntime {
     }
 
     fn offer<'a>(&mut self, _ctx: &mut Context<Self>) -> OutputResponse<'a> {
+        log::info!("Creating Offer template.");
         async move {
             Ok(Some(serde_json::json!({
                 "properties": {
@@ -129,6 +140,8 @@ impl Runtime for OutboundGatewayRuntime {
         network: CreateNetwork,
         _ctx: &mut Context<Self>,
     ) -> EndpointResponse<'a> {
+        log::info!("Running `join_network` with: {network:?}");
+
         let routing = self.routing.clone();
         let endpoint = self.vpn.clone();
         async move {
