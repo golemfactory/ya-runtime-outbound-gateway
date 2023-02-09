@@ -72,6 +72,7 @@ impl Runtime for OutboundGatewayRuntime {
         log::info!("VPN endpoint: {endpoint}");
         self.vpn = Some(endpoint);
 
+        // TODO: Here we should start listening on the same protocol as ExeUnit.
         async move {
             //endpoint.connect(cep).await?;
             Ok(None)
@@ -142,6 +143,9 @@ impl Runtime for OutboundGatewayRuntime {
     ) -> EndpointResponse<'a> {
         log::info!("Running `join_network` with: {network:?}");
 
+        // TODO: I'm returning here the same endpoint, that I got from ExeUnit.
+        //       In reality I should start listening on the same protocol as ExeUnit
+        //       Requested and return my endpoint address here.
         let routing = self.routing.clone();
         let endpoint = self.vpn.clone();
         async move {
