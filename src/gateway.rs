@@ -127,7 +127,7 @@ impl Runtime for OutboundGatewayRuntime {
         async move {
             Ok(Some(serde_json::json!({
                 "properties": {
-                    "golem.runtime.capabilities": ["vpn", "manifest-support", "net-gateway"]
+                    "golem.runtime.capabilities": ["vpn", "gateway"]
                 },
                 "constraints": ""
             })))
