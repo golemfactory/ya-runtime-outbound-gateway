@@ -1,11 +1,14 @@
 use futures::FutureExt;
 use serde::{Deserialize, Serialize};
+use std::process::Stdio;
 use structopt::StructOpt;
 use url::Url;
 
 use ya_runtime_sdk::error::Error;
 use ya_runtime_sdk::server::ContainerEndpoint;
 use ya_runtime_sdk::*;
+
+use crate::routing::RoutingTable;
 
 #[derive(StructOpt)]
 #[structopt(rename_all = "kebab-case")]
@@ -16,19 +19,20 @@ pub struct GatewayCli {
 }
 
 #[derive(Default, Deserialize, Serialize)]
-pub struct GatewayConf {
-    value: usize,
-}
+pub struct GatewayConf {}
 
-#[derive(Default, RuntimeDef)]
+#[derive(Default, RuntimeDef, Clone)]
 #[cli(GatewayCli)]
 #[conf(GatewayConf)]
 pub struct OutboundGatewayRuntime {
     pub vpn: Option<ContainerEndpoint>,
+    pub routing: RoutingTable,
 }
 
 impl Runtime for OutboundGatewayRuntime {
     fn deploy<'a>(&mut self, _: &mut Context<Self>) -> OutputResponse<'a> {
+        log::info!("Running `Deploy` command");
+
         // SDK will auto-generate the following code:
         //
         // async move {
@@ -44,18 +48,33 @@ impl Runtime for OutboundGatewayRuntime {
     }
 
     fn start<'a>(&mut self, ctx: &mut Context<Self>) -> OutputResponse<'a> {
+        log::info!("Running `Start` command");
+
         let _emitter = ctx
             .emitter
             .clone()
             .expect("Service not running in Server mode");
 
         let _workdir = ctx.cli.workdir.clone().expect("Workdir not provided");
-        let vpn_endpoint = ctx.cli.runtime.vpn_endpoint.clone();
 
-        async move {
-            if let Some(vpn_endpoint) = vpn_endpoint {
-                let _endpoint = ContainerEndpoint::try_from(vpn_endpoint).map_err(Error::from)?;
+        log::debug!("VPN endpoint: {:?}", ctx.cli.runtime.vpn_endpoint);
+
+        let endpoint = ctx.cli.runtime.vpn_endpoint.clone();
+        let endpoint = match endpoint.map(|vpn_endpoint| ContainerEndpoint::try_from(vpn_endpoint))
+        {
+            Some(Ok(endpoint)) => endpoint,
+            Some(Err(e)) => return Error::response(format!("Failed to parse VPN endpoint: {e}")),
+            None => {
+                return Error::response("Start command expects VPN endpoint, but None was found.")
             }
+        };
+
+        log::info!("VPN endpoint: {endpoint}");
+        self.vpn = Some(endpoint);
+
+        // TODO: Here we should start listening on the same protocol as ExeUnit.
+        async move {
+            //endpoint.connect(cep).await?;
             Ok(None)
         }
         .boxed_local()
@@ -72,7 +91,7 @@ impl Runtime for OutboundGatewayRuntime {
         mode: RuntimeMode,
         ctx: &mut Context<Self>,
     ) -> ProcessIdResponse<'a> {
-        use std::process::Stdio;
+        log::info!("Running `Run` command with params: {command:?} mode: {mode:?}");
 
         if let RuntimeMode::Command = mode {
             return Error::response("Command mode is not supported");
@@ -104,6 +123,7 @@ impl Runtime for OutboundGatewayRuntime {
     }
 
     fn offer<'a>(&mut self, _ctx: &mut Context<Self>) -> OutputResponse<'a> {
+        log::info!("Creating Offer template.");
         async move {
             Ok(Some(serde_json::json!({
                 "properties": {
@@ -118,9 +138,22 @@ impl Runtime for OutboundGatewayRuntime {
     /// Join a VPN network
     fn join_network<'a>(
         &mut self,
-        _network: CreateNetwork,
+        network: CreateNetwork,
         _ctx: &mut Context<Self>,
     ) -> EndpointResponse<'a> {
-        async move { Err(Error::from_string("Not supported")) }.boxed_local()
+        log::info!("Running `join_network` with: {network:?}");
+
+        // TODO: I'm returning here the same endpoint, that I got from ExeUnit.
+        //       In reality I should start listening on the same protocol as ExeUnit
+        //       Requested and return my endpoint address here.
+        let routing = self.routing.clone();
+        let endpoint = self.vpn.clone();
+        async move {
+            routing.update_network(network).await?;
+            Ok(endpoint.ok_or_else(|| {
+                Error::from_string("VPN ExeUnit - Runtime communication endpoint not set")
+            })?)
+        }
+        .boxed_local()
     }
 }
