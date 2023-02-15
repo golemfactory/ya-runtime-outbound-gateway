@@ -75,7 +75,11 @@ impl Runtime for OutboundGatewayRuntime {
         // TODO: Here we should start listening on the same protocol as ExeUnit.
         async move {
             //endpoint.connect(cep).await?;
-            Ok(None)
+            Ok(Some(serde_json::json!({
+                "startMode": "blocking",
+                "valid": {"Ok": ""},
+                "vols": []
+            })))
         }
         .boxed_local()
     }
