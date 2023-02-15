@@ -70,15 +70,13 @@ impl Runtime for OutboundGatewayRuntime {
         };
 
         log::info!("VPN endpoint: {endpoint}");
-        self.vpn = Some(endpoint);
+        self.vpn = Some(endpoint.clone());
 
         // TODO: Here we should start listening on the same protocol as ExeUnit.
         async move {
             //endpoint.connect(cep).await?;
             Ok(Some(serde_json::json!({
-                "startMode": "blocking",
-                "valid": {"Ok": ""},
-                "vols": []
+                "endpoint": endpoint,
             })))
         }
         .boxed_local()
