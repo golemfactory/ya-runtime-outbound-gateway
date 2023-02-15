@@ -60,7 +60,7 @@ impl Runtime for OutboundGatewayRuntime {
         log::debug!("VPN endpoint: {:?}", ctx.cli.runtime.vpn_endpoint);
 
         let endpoint = ctx.cli.runtime.vpn_endpoint.clone();
-        let endpoint = match endpoint.map(|vpn_endpoint| ContainerEndpoint::try_from(vpn_endpoint))
+        let endpoint = match endpoint.map(ContainerEndpoint::try_from)
         {
             Some(Ok(endpoint)) => endpoint,
             Some(Err(e)) => return Error::response(format!("Failed to parse VPN endpoint: {e}")),
@@ -108,7 +108,7 @@ impl Runtime for OutboundGatewayRuntime {
 
         // Echo the executed command and its arguments
         let started = tokio::process::Command::new("echo")
-            .args(&["Test: Executing echo command on Provider machine - passed"])
+            .args(["Test: Executing echo command on Provider machine - passed"])
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .stdin(Stdio::null())
@@ -152,9 +152,9 @@ impl Runtime for OutboundGatewayRuntime {
         let endpoint = self.vpn.clone();
         async move {
             routing.update_network(network).await?;
-            Ok(endpoint.ok_or_else(|| {
+            endpoint.ok_or_else(|| {
                 Error::from_string("VPN ExeUnit - Runtime communication endpoint not set")
-            })?)
+            })
         }
         .boxed_local()
     }

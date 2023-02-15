@@ -45,7 +45,7 @@ impl RoutingTable {
 
             table
                 .networks
-                .entry(network_address.clone())
+                .entry(network_address)
                 .or_insert(Network {
                     network: network_address,
                     node_ip: our_address,
@@ -53,8 +53,8 @@ impl RoutingTable {
                 })
                 .nodes
                 .extend(update.hosts.iter().filter_map(|(ip, node_id)| {
-                    let ip_result = IpAddr::from_str(&ip);
-                    let id_result = NodeId::from_str(&node_id);
+                    let ip_result = IpAddr::from_str(ip);
+                    let id_result = NodeId::from_str(node_id);
                     match (ip_result, id_result) {
                         (Ok(ip), Ok(id)) => Some((ip, id)),
                         _ => None,
