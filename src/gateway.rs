@@ -88,7 +88,7 @@ impl Runtime for OutboundGatewayRuntime {
                 loop {
                     let (len, addr) = sock.recv_from(buf).await.unwrap();
                     log::info!("{len:?} bytes received from {addr:?}");
-                    log::info!("Packet content {buf:?}");
+                    log::info!("Packet content {:?}", &buf[..len]);
                     match PacketHeaders::from_ethernet_slice(buf) {
                         Err(value) => println!("Err {:?}", value),
                         Ok(value) => {
