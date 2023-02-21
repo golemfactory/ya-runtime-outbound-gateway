@@ -75,7 +75,7 @@ impl Runtime for OutboundGatewayRuntime {
 
         // TODO: Here we should start listening on the same protocol as ExeUnit.
         async move {
-            let sock = UdpSocket::bind(format!("127.0.0.52001")).await.unwrap();
+            let sock = UdpSocket::bind(format!("127.0.0.1:52001")).await.unwrap();
             log::info!("Listening on: {}", sock.local_addr().unwrap());
             let mut buf = [0; 1024];
             loop {
