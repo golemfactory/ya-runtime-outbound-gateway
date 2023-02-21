@@ -9,6 +9,7 @@ use url::Url;
 use ya_runtime_sdk::error::Error;
 use ya_runtime_sdk::server::ContainerEndpoint;
 use ya_runtime_sdk::*;
+use etherparse::PacketHeaders;
 
 use crate::routing::RoutingTable;
 
@@ -82,11 +83,21 @@ impl Runtime for OutboundGatewayRuntime {
             tokio::spawn( async move {
                 let sock = UdpSocket::bind(socket_addr).await.unwrap();
                 log::info!("Listening on: {}", sock.local_addr().unwrap());
-                let mut buf = [0; 1024];
+                let mut buf_box = Box::new([0; 70000]); //sufficient to hold max UDP packet
+                let mut buf = &mut *buf_box;
                 loop {
-                    let (len, addr) = sock.recv_from(&mut buf).await.unwrap();
+                    let (len, addr) = sock.recv_from(buf).await.unwrap();
                     log::info!("{len:?} bytes received from {addr:?}");
-
+                    log::info!("Packet content {buf:?}");
+                    match PacketHeaders::from_ethernet_slice(buf) {
+                        Err(value) => println!("Err {:?}", value),
+                        Ok(value) => {
+                            println!("link: {:?}", value.link);
+                            println!("vlan: {:?}", value.vlan);
+                            println!("ip: {:?}", value.ip);
+                            println!("transport: {:?}", value.transport);
+                        }
+                    }
                     //let len = sock.send_to(&buf[..len], addr).await.unwrap();
                     //ddprintln!("{:?} bytes sent", len);
                 }
