@@ -90,12 +90,12 @@ impl Runtime for OutboundGatewayRuntime {
                     log::info!("{len:?} bytes received from {addr:?}");
                     log::info!("Packet content {:?}", &buf[..len]);
                     match PacketHeaders::from_ethernet_slice(buf) {
-                        Err(value) => println!("Err {:?}", value),
+                        Err(value) => log::info!("Err {:?}", value),
                         Ok(value) => {
-                            println!("link: {:?}", value.link);
-                            println!("vlan: {:?}", value.vlan);
-                            println!("ip: {:?}", value.ip);
-                            println!("transport: {:?}", value.transport);
+                            log::info!("link: {:?}", value.link);
+                            log::info!("vlan: {:?}", value.vlan);
+                            log::info!("ip: {:?}", value.ip);
+                            log::info!("transport: {:?}", value.transport);
                         }
                     }
                     //let len = sock.send_to(&buf[..len], addr).await.unwrap();
