@@ -2,6 +2,7 @@ use futures::FutureExt;
 use serde::{Deserialize, Serialize};
 use std::process::Stdio;
 use structopt::StructOpt;
+use tokio::net::UdpSocket;
 use url::Url;
 
 use ya_runtime_sdk::error::Error;
@@ -74,6 +75,17 @@ impl Runtime for OutboundGatewayRuntime {
 
         // TODO: Here we should start listening on the same protocol as ExeUnit.
         async move {
+            let sock = UdpSocket::bind(format!("{endpoint}")).await.unwrap();
+            log::info!("Listening on: {}", sock.local_addr().unwrap());
+            let mut buf = [0; 1024];
+            loop {
+                let (len, addr) = sock.recv_from(&mut buf).await.unwrap();
+                log::info!("{len:?} bytes received from {addr:?}");
+
+                //let len = sock.send_to(&buf[..len], addr).await.unwrap();
+                //ddprintln!("{:?} bytes sent", len);
+            }
+
             //endpoint.connect(cep).await?;
             Ok(Some(serde_json::json!({
                 "endpoint": endpoint,
