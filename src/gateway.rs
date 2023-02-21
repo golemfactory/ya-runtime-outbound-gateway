@@ -1,5 +1,5 @@
 use std::net::{Ipv4Addr, SocketAddr};
-use futures::FutureExt;
+use futures::{AsyncWriteExt, FutureExt};
 use serde::{Deserialize, Serialize};
 use std::process::Stdio;
 use arp_parse::ARPSliceBuilder;
@@ -10,7 +10,7 @@ use url::Url;
 use ya_runtime_sdk::error::Error;
 use ya_runtime_sdk::server::ContainerEndpoint;
 use ya_runtime_sdk::*;
-use etherparse::{EtherType, PacketHeaders};
+use etherparse::{EtherType, PacketBuilder, PacketHeaders};
 
 use crate::routing::RoutingTable;
 
@@ -93,27 +93,51 @@ impl Runtime for OutboundGatewayRuntime {
                     match PacketHeaders::from_ethernet_slice(buf) {
                         Err(value) => log::info!("Err {:?}", value),
                         Ok(value) => {
-                            if let Some(link) = value.link.clone().map(|link| link.ether_type == EtherType::Arp as u16) {
+                            if let Some(link) = value.link {
+                                log::info!("link: {:?}", link);
+                                if link.ether_type == EtherType::Arp as u16
+                                {
+                                    let slice = arp_parse::parse(value.payload).unwrap();
+                                    let op_code = slice.op_code();
+                                    if op_code == arp_parse::OPCODE_REQUEST {
+                                        let target_ip_addr = Ipv4Addr::new(
+                                            slice.target_protocol_addr()[0],
+                                            slice.target_protocol_addr()[1],
+                                            slice.target_protocol_addr()[2],
+                                            slice.target_protocol_addr()[3]);
+                                        log::info!("ARP request for IP {}", target_ip_addr);
 
-                                let slice = arp_parse::parse(value.payload).unwrap();
-                                let op_code = slice.op_code();
-                                if op_code == arp_parse::OPCODE_REQUEST {
-                                    let target_ip_addr = Ipv4Addr::new(
-                                        slice.target_protocol_addr()[0],
-                                        slice.target_protocol_addr()[1],
-                                        slice.target_protocol_addr()[2],
-                                        slice.target_protocol_addr()[3]);
-                                    log::info!("ARP request for IP {}", target_ip_addr);
-                                    //let arp_response_builder = ARPSliceBuilder::new(buf) {
+                                        let mut buf_resp = [0u8; arp_parse::ARP_SIZE];
+                                        let mut yagna_mac = [0u8; arp_parse::HARDWARE_SIZE_ETHERNET as usize];
+                                        let arp_response_builder = ARPSliceBuilder::new(&mut buf_resp).unwrap()
+                                            .sender_hardware_addr(&yagna_mac).unwrap()
+                                            .sender_protocol_addr(slice.target_protocol_addr()).unwrap()
+                                            .target_protocol_addr(slice.sender_protocol_addr()).unwrap()
+                                            .target_hardware_addr(slice.sender_hardware_addr()).unwrap();
 
-//                                    }
+                                        let mut builder = PacketBuilder::ethernet2(
+                                            link.destination,
+                                            link.source).ipv4([192, 168, 1, 1], //source ip
+                                                                                [192, 168, 1, 2], //destination ip
+                                                                                20)            //time to life
+                                            .udp(21,    //source port
+                                                 1234);
+                                        ;
+                                            ;
+                                        //let mut result = Vec::<u8>::with_capacity(builder.size(buf_resp.len()));
+                                        let mut result = Vec::<u8>::with_capacity(
+                                            builder.size(buf_resp.len()));
+                                        builder.write(&mut result, &buf_resp);
+
+                                        log::info!("Sending ARP response: {:?}", result);
+
+                                        let len = sock.send_to(&result, addr).await.unwrap();
+                                    }
                                 }
-
                             }
                             //    let slice = arp_parse::parse(&buff).unwrap();
                             //    let op_code = slice.op_code();
                             //}
-                            log::info!("link: {:?}", value.link);
                             log::info!("vlan: {:?}", value.vlan);
                             log::info!("ip: {:?}", value.ip);
                             log::info!("transport: {:?}", value.transport);
