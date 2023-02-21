@@ -1,7 +1,8 @@
-use std::net::SocketAddr;
+use std::net::{Ipv4Addr, SocketAddr};
 use futures::FutureExt;
 use serde::{Deserialize, Serialize};
 use std::process::Stdio;
+use arp_parse::ARPSliceBuilder;
 use structopt::StructOpt;
 use tokio::net::UdpSocket;
 use url::Url;
@@ -9,7 +10,7 @@ use url::Url;
 use ya_runtime_sdk::error::Error;
 use ya_runtime_sdk::server::ContainerEndpoint;
 use ya_runtime_sdk::*;
-use etherparse::PacketHeaders;
+use etherparse::{EtherType, PacketHeaders};
 
 use crate::routing::RoutingTable;
 
@@ -92,12 +93,33 @@ impl Runtime for OutboundGatewayRuntime {
                     match PacketHeaders::from_ethernet_slice(buf) {
                         Err(value) => log::info!("Err {:?}", value),
                         Ok(value) => {
+                            if let Some(link) = value.link.clone().map(|link| link.ether_type == EtherType::Arp as u16) {
+
+                                let slice = arp_parse::parse(value.payload).unwrap();
+                                let op_code = slice.op_code();
+                                if op_code == arp_parse::OPCODE_REQUEST {
+                                    let target_ip_addr = Ipv4Addr::new(
+                                        slice.target_protocol_addr()[0],
+                                        slice.target_protocol_addr()[1],
+                                        slice.target_protocol_addr()[2],
+                                        slice.target_protocol_addr()[3]);
+                                    log::info!("ARP request for IP {}", target_ip_addr);
+                                    //let arp_response_builder = ARPSliceBuilder::new(buf) {
+
+//                                    }
+                                }
+
+                            }
+                            //    let slice = arp_parse::parse(&buff).unwrap();
+                            //    let op_code = slice.op_code();
+                            //}
                             log::info!("link: {:?}", value.link);
                             log::info!("vlan: {:?}", value.vlan);
                             log::info!("ip: {:?}", value.ip);
                             log::info!("transport: {:?}", value.transport);
                         }
                     }
+
                     //let len = sock.send_to(&buf[..len], addr).await.unwrap();
                     //ddprintln!("{:?} bytes sent", len);
                 }
