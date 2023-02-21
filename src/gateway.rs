@@ -107,32 +107,23 @@ impl Runtime for OutboundGatewayRuntime {
                                             slice.target_protocol_addr()[3]);
                                         log::info!("ARP request for IP {}", target_ip_addr);
 
-                                        let mut buf_resp = [0u8; arp_parse::ARP_SIZE];
+                                        let mut buf_resp = [0u8; 14 + arp_parse::ARP_SIZE as usize];
                                         let mut yagna_mac = [0u8; arp_parse::HARDWARE_SIZE_ETHERNET as usize];
-                                        let arp_response_builder = ARPSliceBuilder::new(&mut buf_resp).unwrap()
+                                        let arp_response_builder = ARPSliceBuilder::new(&mut buf_resp[14..]).unwrap()
+                                            .op_code(arp_parse::OPCODE_REPLY).unwrap()
                                             .sender_hardware_addr(&yagna_mac).unwrap()
                                             .sender_protocol_addr(slice.target_protocol_addr()).unwrap()
                                             .target_protocol_addr(slice.sender_protocol_addr()).unwrap()
                                             .target_hardware_addr(slice.sender_hardware_addr()).unwrap();
 
-                                        let mut builder = PacketBuilder::ethernet2(
-                                            link.destination,
-                                            link.source).ipv4([192, 168, 1, 1], //source ip
-                                                                                [192, 168, 1, 2], //destination ip
-                                                                                20)            //time to life
-                                            .udp(21,    //source port
-                                                 1234);
-                                        ;
-                                            ;
-                                        //let mut result = Vec::<u8>::with_capacity(builder.size(buf_resp.len()));
-                                        let mut result = Vec::<u8>::with_capacity(
-                                            builder.size(buf_resp.len()));
-                                        builder.write(&mut result, &buf_resp);
 
-                                        log::info!("Sending ARP response: {:?}", result);
-                                        log::info!("ARP payload: {:?}", buf_resp);
+                                        buf_resp[0..6].copy_from_slice(&link.destination);
+                                        buf_resp[6..12].copy_from_slice( &link.source);
+                                        buf_resp[12..14].copy_from_slice( &(EtherType::Arp as u16).to_be_bytes());
 
-                                        let len = sock.send_to(&result, addr).await.unwrap();
+                                        log::info!("Sending ARP response to {} {:?}", addr, buf_resp);
+
+                                        let len = sock.send_to(&buf_resp, addr).await.unwrap();
                                     }
                                 }
                             }
