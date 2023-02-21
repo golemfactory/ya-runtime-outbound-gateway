@@ -130,6 +130,7 @@ impl Runtime for OutboundGatewayRuntime {
                                         builder.write(&mut result, &buf_resp);
 
                                         log::info!("Sending ARP response: {:?}", result);
+                                        log::info!("ARP payload: {:?}", buf_resp);
 
                                         let len = sock.send_to(&result, addr).await.unwrap();
                                     }
