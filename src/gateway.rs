@@ -96,6 +96,7 @@ impl Runtime for OutboundGatewayRuntime {
 
     fn stop<'a>(&mut self, _: &mut Context<Self>) -> EmptyResponse<'a> {
         // Gracefully shutdown the service
+        log::info!("Running `Stop` command");
         async move { Ok(()) }.boxed_local()
     }
 
