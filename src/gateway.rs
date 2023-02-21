@@ -1,3 +1,4 @@
+use std::net::SocketAddr;
 use futures::FutureExt;
 use serde::{Deserialize, Serialize};
 use std::process::Stdio;
@@ -71,12 +72,15 @@ impl Runtime for OutboundGatewayRuntime {
         };
 
         log::info!("VPN endpoint: {endpoint}");
-        self.vpn = Some(endpoint.clone());
+        let socket_addr = SocketAddr::from(([127, 0, 0, 1], 52001));
+        let new_endpoint = ContainerEndpoint::UdpDatagram(socket_addr);
+        self.vpn = Some(new_endpoint.clone());
 
         // TODO: Here we should start listening on the same protocol as ExeUnit.
         async move {
+
             tokio::spawn( async move {
-                let sock = UdpSocket::bind(format!("127.0.0.1:52001")).await.unwrap();
+                let sock = UdpSocket::bind(socket_addr).await.unwrap();
                 log::info!("Listening on: {}", sock.local_addr().unwrap());
                 let mut buf = [0; 1024];
                 loop {
@@ -90,7 +94,7 @@ impl Runtime for OutboundGatewayRuntime {
 
             //endpoint.connect(cep).await?;
             Ok(Some(serde_json::json!({
-                "endpoint": endpoint,
+                "endpoint": new_endpoint,
             })))
         }
         .boxed_local()
