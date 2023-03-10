@@ -150,12 +150,11 @@ impl Runtime for OutboundGatewayRuntime {
                                 if link.ether_type == EtherType::Ipv4 as u16
                                 {
                                     let mut buf_resp = buf[..len].to_vec();
-
+                                    let buf_resp_len = buf_resp.len();
                                     let packet = value.payload;
                                     let mut bytes = packet.to_vec();
                                     let reversed = reverse_udp(&mut bytes).unwrap();
-
-                                    buf_resp[..value.payload.len()].copy_from_slice(&reversed[..value.payload.len()]);
+                                    buf_resp[(buf_resp_len - value.payload.len())..].copy_from_slice(&reversed[..]);
                                     buf_resp[0..6].copy_from_slice(&link.destination);
                                     buf_resp[6..12].copy_from_slice( &link.source);
 
