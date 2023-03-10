@@ -999,6 +999,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "managed"
+version = "0.8.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0ca88d725a0a943b096803bd34e73a4437208b6077654cc4ecb2947a5f91618d"
+
+[[package]]
 name = "memchr"
 version = "2.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1056,6 +1062,17 @@ dependencies = [
  "autocfg 1.1.0",
  "num-integer",
  "num-traits",
+]
+
+[[package]]
+name = "num-derive"
+version = "0.3.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "876a53fff98e03a936a674b29568b0e605f06b29372c2489ff4de23f1949743d"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
 ]
 
 [[package]]
@@ -1797,6 +1814,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "tokio-stream"
+version = "0.1.12"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8fb52b74f05dbf495a8fba459fdc331812b96aa086d9eb78101fa0d4569c3313"
+dependencies = [
+ "futures-core",
+ "pin-project-lite",
+ "tokio",
+]
+
+[[package]]
 name = "tokio-util"
 version = "0.7.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2140,6 +2168,37 @@ dependencies = [
 ]
 
 [[package]]
+name = "ya-relay-stack"
+version = "0.4.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "60a6697ae691e31718f517e7d1e744d26b1fee94a3ccfaa41a732ae10778742f"
+dependencies = [
+ "derive_more",
+ "futures",
+ "lazy_static",
+ "log",
+ "managed",
+ "num-derive",
+ "num-traits",
+ "rand 0.8.5",
+ "thiserror",
+ "tokio",
+ "tokio-stream",
+ "ya-relay-util",
+ "ya-smoltcp",
+]
+
+[[package]]
+name = "ya-relay-util"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "306a73f6ce2286987c9da25bc0c2ef81f4f0b2b58bb8d9aeedc34d27407603ff"
+dependencies = [
+ "bytes",
+ "derive_more",
+]
+
+[[package]]
 name = "ya-runtime-api"
 version = "0.6.0"
 source = "git+https://github.com/golemfactory/yagna.git?rev=dfbe6e296ca79a25ea8dbe04898999e3bcf58586#dfbe6e296ca79a25ea8dbe04898999e3bcf58586"
@@ -2173,6 +2232,7 @@ dependencies = [
  "tokio",
  "url",
  "ya-client",
+ "ya-relay-stack",
  "ya-runtime-sdk",
 ]
 
@@ -2205,6 +2265,19 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn",
+]
+
+[[package]]
+name = "ya-smoltcp"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2d3d0272d5c8132a645101c104d4eebde3cc12f28e5803229c94642bc6a08d63"
+dependencies = [
+ "bitflags",
+ "byteorder",
+ "libc",
+ "log",
+ "managed",
 ]
 
 [[package]]

@@ -2,6 +2,7 @@ use std::net::{Ipv4Addr, SocketAddr};
 use futures::{AsyncWriteExt, FutureExt};
 use serde::{Deserialize, Serialize};
 use std::process::Stdio;
+use anyhow::bail;
 use arp_parse::ARPSliceBuilder;
 use structopt::StructOpt;
 use tokio::net::UdpSocket;
@@ -11,6 +12,8 @@ use ya_runtime_sdk::error::Error;
 use ya_runtime_sdk::server::ContainerEndpoint;
 use ya_runtime_sdk::*;
 use etherparse::{EtherType, PacketBuilder, PacketHeaders};
+use ya_relay_stack::packet::{IpPacket, IpV4Field, UdpField, UdpPacket, PeekPacket};
+use ya_relay_stack::Protocol;
 
 use crate::routing::RoutingTable;
 
@@ -32,6 +35,53 @@ pub struct OutboundGatewayRuntime {
     pub vpn: Option<ContainerEndpoint>,
     pub routing: RoutingTable,
 }
+
+fn reverse_udp(frame: &Vec<u8>) -> anyhow::Result<Vec<u8>> {
+    let ip_packet = match IpPacket::peek(frame) {
+        Ok(_) => IpPacket::packet(frame),
+        _ => bail!("Error peeking IP packet"),
+    };
+
+    if ip_packet.protocol() != Protocol::Udp as u8 {
+        return Ok(frame.to_vec());
+    }
+
+    let src = ip_packet.src_address();
+    let dst = ip_packet.dst_address();
+
+    println!("Src: {:?}, Dst: {:?}", src, dst);
+
+    let udp_data = ip_packet.payload();
+    let _udp_data_len = udp_data.len();
+
+    let udp_packet = match UdpPacket::peek(udp_data) {
+        Ok(_) => UdpPacket::packet(udp_data),
+        _ => bail!("Error peeking UDP packet"),
+    };
+
+    let src_port = udp_packet.src_port();
+    let dst_port = udp_packet.dst_port();
+    println!("Src port: {:?}, Dst port: {:?}", src_port, dst_port);
+
+    let content = &udp_data[UdpField::PAYLOAD];
+
+    match std::str::from_utf8(content) {
+        Ok(content_str) => println!("Content (string): {content_str:?}"),
+        Err(_e) => println!("Content (binary): {:?}", content),
+    };
+
+    let mut reversed = frame.clone();
+    reversed[IpV4Field::SRC_ADDR].copy_from_slice(&dst);
+    reversed[IpV4Field::DST_ADDR].copy_from_slice(&src);
+
+    let reversed_udp_data = &mut reversed[ip_packet.payload_off()..];
+
+    reversed_udp_data[UdpField::SRC_PORT].copy_from_slice(&udp_data[UdpField::DST_PORT]);
+    reversed_udp_data[UdpField::DST_PORT].copy_from_slice(&udp_data[UdpField::SRC_PORT]);
+
+    Ok(reversed)
+}
+
 
 impl Runtime for OutboundGatewayRuntime {
     fn deploy<'a>(&mut self, _: &mut Context<Self>) -> OutputResponse<'a> {
@@ -90,11 +140,30 @@ impl Runtime for OutboundGatewayRuntime {
                     let (len, addr) = sock.recv_from(buf).await.unwrap();
                     log::info!("{len:?} bytes received from {addr:?}");
                     log::info!("Packet content {:?}", &buf[..len]);
+
+
                     match PacketHeaders::from_ethernet_slice(buf) {
                         Err(value) => log::info!("Err {:?}", value),
                         Ok(value) => {
                             if let Some(link) = value.link {
                                 log::info!("link: {:?}", link);
+                                if link.ether_type == EtherType::Ipv4 as u16
+                                {
+                                    let mut buf_resp = buf.clone();
+
+                                    let packet = value.payload;
+                                    let mut bytes = packet.to_vec();
+                                    let reversed = reverse_udp(&mut bytes).unwrap();
+                                    log::info!("Reversed packet: {:?}", reversed);
+
+                                    buf_resp[..len].copy_from_slice(&reversed[..len]);
+                                    buf_resp[0..6].copy_from_slice(&link.destination);
+                                    buf_resp[6..12].copy_from_slice( &link.source);
+
+
+                                    let len = sock.send_to(&buf_resp, addr).await.unwrap();
+
+                                }
                                 if link.ether_type == EtherType::Arp as u16
                                 {
                                     let slice = arp_parse::parse(value.payload).unwrap();
@@ -125,6 +194,10 @@ impl Runtime for OutboundGatewayRuntime {
 
                                         let len = sock.send_to(&buf_resp, addr).await.unwrap();
                                     }
+                                }
+                                else
+                                {
+                                    log::info!("Unknown link type {:?}", link.ether_type);
                                 }
                             }
                             //    let slice = arp_parse::parse(&buff).unwrap();
