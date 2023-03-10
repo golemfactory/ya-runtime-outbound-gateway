@@ -142,7 +142,7 @@ impl Runtime for OutboundGatewayRuntime {
                     log::info!("Packet content {:?}", &buf[..len]);
 
 
-                    match PacketHeaders::from_ethernet_slice(buf) {
+                    match PacketHeaders::from_ethernet_slice(&buf[..len]) {
                         Err(value) => log::info!("Err {:?}", value),
                         Ok(value) => {
                             if let Some(link) = value.link {
