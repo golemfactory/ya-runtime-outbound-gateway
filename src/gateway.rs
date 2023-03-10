@@ -149,19 +149,19 @@ impl Runtime for OutboundGatewayRuntime {
                                 log::info!("link: {:?}", link);
                                 if link.ether_type == EtherType::Ipv4 as u16
                                 {
-                                    let mut buf_resp = buf.clone();
+                                    let mut buf_resp = buf[..len].to_vec();
 
                                     let packet = value.payload;
                                     let mut bytes = packet.to_vec();
                                     let reversed = reverse_udp(&mut bytes).unwrap();
-                                    log::info!("Reversed packet: {:?}", reversed);
 
-                                    buf_resp[..len].copy_from_slice(&reversed[..len]);
+                                    buf_resp[..value.payload.len()].copy_from_slice(&reversed[..value.payload.len()]);
                                     buf_resp[0..6].copy_from_slice(&link.destination);
                                     buf_resp[6..12].copy_from_slice( &link.source);
 
+                                    log::info!("Reversed packet: {:?}", buf_resp);
 
-                                    let len = sock.send_to(&buf_resp[..len], addr).await.unwrap();
+                                    let len = sock.send_to(&buf_resp, addr).await.unwrap();
 
                                 }
                                 if link.ether_type == EtherType::Arp as u16
