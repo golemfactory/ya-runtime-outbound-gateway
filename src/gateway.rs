@@ -161,7 +161,7 @@ impl Runtime for OutboundGatewayRuntime {
                                     buf_resp[6..12].copy_from_slice( &link.source);
 
 
-                                    let len = sock.send_to(&buf_resp, addr).await.unwrap();
+                                    let len = sock.send_to(&buf_resp[..len], addr).await.unwrap();
 
                                 }
                                 if link.ether_type == EtherType::Arp as u16
