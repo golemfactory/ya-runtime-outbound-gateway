@@ -154,9 +154,9 @@ impl Runtime for OutboundGatewayRuntime {
                                     let packet = value.payload;
                                     let mut bytes = packet.to_vec();
                                     let reversed = reverse_udp(&mut bytes).unwrap();
-                                    buf_resp[(buf_resp_len - value.payload.len())..].copy_from_slice(&reversed[..]);
                                     buf_resp[0..6].copy_from_slice(&link.destination);
                                     buf_resp[6..12].copy_from_slice( &link.source);
+                                    buf_resp[14..].copy_from_slice( &reversed[..]);
 
                                     log::info!("Reversed packet: {:?}", buf_resp);
 
