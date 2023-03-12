@@ -141,153 +141,129 @@ impl Runtime for OutboundGatewayRuntime {
                     log::info!("Packet content {:?}", &buf[..len]);
 
 
-                    match PacketHeaders::from_ethernet_slice(&buf[..len]) {
-                        Err(value) => log::info!("Err {:?}", value),
-                        Ok(value) => {
-                            log::info!("vlan: {:?}", value.vlan);
-                            log::info!("ip: {:?}", value.ip);
-                            log::info!("transport: {:?}", value.transport);
-                            if let Some(link) = value.link {
-                                log::info!("link: {:?}", link);
-                                let ether_type = EtherType::from_u16(link.ether_type);
-                                match ether_type {
-                                    Some(EtherType::Ipv4 | EtherType::Ipv6) => {
-                                        if let Some(ip) = value.ip {
-                                            log::info!("ip: {:?}", ip);
-                                            match ip {
-                                                Version4(ip, _ipv4_extensions) => {
-                                                    match value.transport {
-                                                        Some(TransportHeader::Udp(udp_header)) => {
-                                                            let builder = PacketBuilder::ethernet2(
-                                                                link.source,
-                                                                link.destination,
-                                                            )
-                                                                .ipv4(
-                                                                    ip.destination,
-                                                                    ip.source,
-                                                                    ip.time_to_live,
-                                                                )
-                                                                .udp(
-                                                                    udp_header.destination_port,
-                                                                    udp_header.source_port
-                                                                ); //desitnation port
-                                                            // payload of the udp packet
-                                                            let payload = value.payload;
-                                                            // get some memory to store the serialized data
-                                                            let mut complete_packet =
-                                                                Vec::<u8>::with_capacity(builder.size(payload.len()));
-                                                            builder.write(&mut complete_packet, &payload).unwrap();
+                    let value = match PacketHeaders::from_ethernet_slice(&buf[..len]) {
+                        Err(value) => {
+                            log::warn!("Failed to parse/read packet {:?}", value);
+                            continue;
+                        },
+                        Ok(value) => value
+                    };
 
-                                                            log::info!("Sending packet: {:?}", complete_packet);
-                                                            let _ = sock.send_to(&complete_packet, addr).await;
-                                                            log::info!("udp: {:?}", udp_header);
-                                                        }
-                                                        Some(TransportHeader::Tcp(tcp_header)) => {
-                                                            log::info!("tcp: {:?}", tcp_header);
-                                                        }
-                                                        Some(TransportHeader::Icmpv4(icmp_header)) => {
-                                                            log::info!("icmp: {:?}", icmp_header);
-                                                        }
-                                                        Some(TransportHeader::Icmpv6(icmp_header)) => {
-                                                            log::info!("icmp: {:?}", icmp_header);
-                                                        }
-                                                        None => {
-                                                            log::info!("No transport header");
-                                                        }
-                                                    }
-                                                }
-                                                Version6(_ipv6_header, _ipv6_ext) => {
-                                                    log::info!("IpV6");
-                                                }
+                    log::info!("link: {:?}", value.link);
+                    log::info!("vlan: {:?}", value.vlan);
+                    log::info!("ip: {:?}", value.ip);
+                    log::info!("transport: {:?}", value.transport);
+
+
+                    let link = if let Some(link) = value.link {
+                        link
+                    } else {
+                        log::warn!("No ethernet header found {:?}", value);
+                        continue;
+                    };
+
+                    let ether_type = EtherType::from_u16(link.ether_type);
+                    match ether_type {
+                        Some(EtherType::Ipv4 | EtherType::Ipv6) => {
+                            if let Some(ip) = value.ip {
+                                log::info!("ip: {:?}", ip);
+                                match ip {
+                                    Version4(ip, _ipv4_extensions) => {
+                                        match value.transport {
+                                            Some(TransportHeader::Udp(udp_header)) => {
+                                                let builder = PacketBuilder::ethernet2(
+                                                    link.source,
+                                                    link.destination,
+                                                )
+                                                    .ipv4(
+                                                        ip.destination,
+                                                        ip.source,
+                                                        ip.time_to_live,
+                                                    )
+                                                    .udp(
+                                                        udp_header.destination_port,
+                                                        udp_header.source_port
+                                                    ); //desitnation port
+                                                // payload of the udp packet
+                                                let payload = value.payload;
+                                                // get some memory to store the serialized data
+                                                let mut complete_packet =
+                                                    Vec::<u8>::with_capacity(builder.size(payload.len()));
+                                                builder.write(&mut complete_packet, &payload).unwrap();
+
+                                                log::info!("Sending packet: {:?}", complete_packet);
+                                                let _ = sock.send_to(&complete_packet, addr).await;
+                                                log::info!("udp: {:?}", udp_header);
+                                            }
+                                            Some(TransportHeader::Tcp(tcp_header)) => {
+                                                log::info!("tcp: {:?}", tcp_header);
+                                            }
+                                            Some(TransportHeader::Icmpv4(icmp_header)) => {
+                                                log::info!("icmp: {:?}", icmp_header);
+                                            }
+                                            Some(TransportHeader::Icmpv6(icmp_header)) => {
+                                                log::info!("icmp: {:?}", icmp_header);
+                                            }
+                                            None => {
+                                                log::info!("No transport header");
                                             }
                                         }
-                                    },
-                                    Some(EtherType::Arp) => {
-                                        let slice = arp_parse::parse(value.payload).unwrap();
-                                        let op_code = slice.op_code();
-                                        if op_code == arp_parse::OPCODE_REQUEST {
-                                            let target_ip_addr = Ipv4Addr::new(
-                                                slice.target_protocol_addr()[0],
-                                                slice.target_protocol_addr()[1],
-                                                slice.target_protocol_addr()[2],
-                                                slice.target_protocol_addr()[3],
-                                            );
-                                            log::info!("ARP request for IP {}", target_ip_addr);
-
-                                            let mut buf_resp = [0u8; 14 + arp_parse::ARP_SIZE as usize];
-                                            let yagna_mac =
-                                                [0u8; arp_parse::HARDWARE_SIZE_ETHERNET as usize];
-                                            let _arp_response_builder =
-                                                ARPSliceBuilder::new(&mut buf_resp[14..])
-                                                    .unwrap()
-                                                    .op_code(arp_parse::OPCODE_REPLY)
-                                                    .unwrap()
-                                                    .sender_hardware_addr(&yagna_mac)
-                                                    .unwrap()
-                                                    .sender_protocol_addr(slice.target_protocol_addr())
-                                                    .unwrap()
-                                                    .target_protocol_addr(slice.sender_protocol_addr())
-                                                    .unwrap()
-                                                    .target_hardware_addr(slice.sender_hardware_addr())
-                                                    .unwrap();
-
-                                            buf_resp[0..6].copy_from_slice(&link.destination);
-                                            buf_resp[6..12].copy_from_slice(&link.source);
-                                            buf_resp[12..14].copy_from_slice(
-                                                &(EtherType::Arp as u16).to_be_bytes(),
-                                            );
-
-                                            log::info!(
-                                            "Sending ARP response to {} {:?}",
-                                            addr,
-                                            buf_resp
-                                        );
-
-                                            let _len = sock.send_to(&buf_resp, addr).await.unwrap();
-                                        }
                                     }
-                                    Some(_) => log::info!("Unknown link type {:?}", ether_type),
-                                    None => log::info!("Unknown link type"),
-                                };
+                                    Version6(_ipv6_header, _ipv6_ext) => {
+                                        log::info!("IpV6");
+                                    }
+                                }
+                            }
+                        },
+                        Some(EtherType::Arp) => {
+                            let slice = arp_parse::parse(value.payload).unwrap();
+                            let op_code = slice.op_code();
+                            if op_code == arp_parse::OPCODE_REQUEST {
+                                let target_ip_addr = Ipv4Addr::new(
+                                    slice.target_protocol_addr()[0],
+                                    slice.target_protocol_addr()[1],
+                                    slice.target_protocol_addr()[2],
+                                    slice.target_protocol_addr()[3],
+                                );
+                                log::info!("ARP request for IP {}", target_ip_addr);
 
+                                let mut buf_resp = [0u8; 14 + arp_parse::ARP_SIZE as usize];
+                                let yagna_mac =
+                                    [0u8; arp_parse::HARDWARE_SIZE_ETHERNET as usize];
+                                let _arp_response_builder =
+                                    ARPSliceBuilder::new(&mut buf_resp[14..])
+                                        .unwrap()
+                                        .op_code(arp_parse::OPCODE_REPLY)
+                                        .unwrap()
+                                        .sender_hardware_addr(&yagna_mac)
+                                        .unwrap()
+                                        .sender_protocol_addr(slice.target_protocol_addr())
+                                        .unwrap()
+                                        .target_protocol_addr(slice.sender_protocol_addr())
+                                        .unwrap()
+                                        .target_hardware_addr(slice.sender_hardware_addr())
+                                        .unwrap();
 
-                                /*
-                                                                   {
+                                buf_resp[0..6].copy_from_slice(&link.destination);
+                                buf_resp[6..12].copy_from_slice(&link.source);
+                                buf_resp[12..14].copy_from_slice(
+                                    &(EtherType::Arp as u16).to_be_bytes(),
+                                );
 
-                                                                       use etherparse::{
-                                                                           Ethernet2Header, PacketBuilder, SerializedSize,
-                                                                       };
-                                                                       let builder = PacketBuilder::ethernet2(
-                                                                           [1, 2, 3, 4, 5, 6], //source mac
-                                                                           [7, 8, 9, 10, 11, 12],
-                                                                       ) //destionation mac
-                                                                       .ipv4(
-                                                                           [192, 168, 1, 1], //source ip
-                                                                           [192, 168, 1, 2], //desitionation ip
-                                                                           20,
-                                                                       ) //time to life
-                                                                       .udp(
-                                                                           21, //source port
-                                                                           1234,
-                                                                       ); //desitnation port
-                                                                          // payload of the udp packet
-                                                                       let payload = [1, 2, 3, 4, 5, 6, 7, 8];
-                                                                       // get some memory to store the serialized data
-                                                                       let mut complete_packet =
-                                                                           Vec::<u8>::with_capacity(builder.size(payload.len()));
-                                                                       builder.write(&mut complete_packet, &payload).unwrap();
-                                                                       // skip ethernet 2 header so we can parse from there downwards
-                                                                       let packet =
-                                                                           &complete_packet[Ethernet2Header::SERIALIZED_SIZE..];
-                                                                   }
-*/
+                                log::info!(
+                                "Sending ARP response to {} {:?}",
+                                addr,
+                                buf_resp
+                            );
+
+                                let _len = sock.send_to(&buf_resp, addr).await.unwrap();
+                            }
                         }
-                    }
-
-                    //let len = sock.send_to(&buf[..len], addr).await.unwrap();
-                    //ddprintln!("{:?} bytes sent", len);
+                        Some(_) => log::info!("Unknown link type {:?}", ether_type),
+                        None => log::info!("Unknown link type"),
+                    };
                 }
-            }});
+            });
 
             //endpoint.connect(cep).await?;
             Ok(Some(serde_json::json!({
