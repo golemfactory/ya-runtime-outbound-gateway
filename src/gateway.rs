@@ -1,19 +1,21 @@
-use std::net::{Ipv4Addr, SocketAddr};
-use futures::{AsyncWriteExt, FutureExt};
-use serde::{Deserialize, Serialize};
-use std::process::Stdio;
 use anyhow::bail;
 use arp_parse::ARPSliceBuilder;
+use futures::{FutureExt};
+use serde::{Deserialize, Serialize};
+use std::net::{Ipv4Addr, SocketAddr};
+use std::process::Stdio;
 use structopt::StructOpt;
 use tokio::net::UdpSocket;
 use url::Url;
 
+use etherparse::{EtherType, PacketBuilder, PacketHeaders, TransportHeader};
+use etherparse::IpHeader::{Version4, Version6};
+use ya_relay_stack::packet::{IpPacket, IpV4Field, PeekPacket, UdpField, UdpPacket};
+use ya_relay_stack::Protocol;
+
 use ya_runtime_sdk::error::Error;
 use ya_runtime_sdk::server::ContainerEndpoint;
 use ya_runtime_sdk::*;
-use etherparse::{EtherType, PacketBuilder, PacketHeaders};
-use ya_relay_stack::packet::{IpPacket, IpV4Field, UdpField, UdpPacket, PeekPacket};
-use ya_relay_stack::Protocol;
 
 use crate::routing::RoutingTable;
 
@@ -36,7 +38,7 @@ pub struct OutboundGatewayRuntime {
     pub routing: RoutingTable,
 }
 
-fn reverse_udp(frame: &Vec<u8>) -> anyhow::Result<Vec<u8>> {
+fn _reverse_udp(frame: &Vec<u8>) -> anyhow::Result<Vec<u8>> {
     let ip_packet = match IpPacket::peek(frame) {
         Ok(_) => IpPacket::packet(frame),
         _ => bail!("Error peeking IP packet"),
@@ -82,7 +84,6 @@ fn reverse_udp(frame: &Vec<u8>) -> anyhow::Result<Vec<u8>> {
     Ok(reversed)
 }
 
-
 impl Runtime for OutboundGatewayRuntime {
     fn deploy<'a>(&mut self, _: &mut Context<Self>) -> OutputResponse<'a> {
         log::info!("Running `Deploy` command");
@@ -114,8 +115,7 @@ impl Runtime for OutboundGatewayRuntime {
         log::debug!("VPN endpoint: {:?}", ctx.cli.runtime.vpn_endpoint);
 
         let endpoint = ctx.cli.runtime.vpn_endpoint.clone();
-        let endpoint = match endpoint.map(ContainerEndpoint::try_from)
-        {
+        let endpoint = match endpoint.map(ContainerEndpoint::try_from) {
             Some(Ok(endpoint)) => endpoint,
             Some(Err(e)) => return Error::response(format!("Failed to parse VPN endpoint: {e}")),
             None => {
@@ -130,12 +130,11 @@ impl Runtime for OutboundGatewayRuntime {
 
         // TODO: Here we should start listening on the same protocol as ExeUnit.
         async move {
-
-            tokio::spawn( async move {
+            tokio::spawn(async move {
                 let sock = UdpSocket::bind(socket_addr).await.unwrap();
                 log::info!("Listening on: {}", sock.local_addr().unwrap());
                 let mut buf_box = Box::new([0; 70000]); //sufficient to hold max UDP packet
-                let mut buf = &mut *buf_box;
+                let buf = &mut *buf_box;
                 loop {
                     let (len, addr) = sock.recv_from(buf).await.unwrap();
                     log::info!("{len:?} bytes received from {addr:?}");
@@ -145,78 +144,156 @@ impl Runtime for OutboundGatewayRuntime {
                     match PacketHeaders::from_ethernet_slice(&buf[..len]) {
                         Err(value) => log::info!("Err {:?}", value),
                         Ok(value) => {
-                            if let Some(link) = value.link {
-                                log::info!("link: {:?}", link);
-                                if link.ether_type == EtherType::Ipv4 as u16
-                                {
-                                    let mut buf_resp = buf[..len].to_vec();
-                                    let buf_resp_len = buf_resp.len();
-                                    let packet = value.payload;
-                                    let mut bytes = packet.to_vec();
-                                    let reversed = reverse_udp(&mut bytes).unwrap();
-                                    buf_resp[0..6].copy_from_slice(&link.destination);
-                                    buf_resp[6..12].copy_from_slice( &link.source);
-                                    buf_resp[14..].copy_from_slice( &reversed[..]);
-
-                                    log::info!("Reversed packet: {:?}", buf_resp);
-
-                                    let len = sock.send_to(&buf_resp, addr).await.unwrap();
-
-                                }
-                                if link.ether_type == EtherType::Arp as u16
-                                {
-                                    let slice = arp_parse::parse(value.payload).unwrap();
-                                    let op_code = slice.op_code();
-                                    if op_code == arp_parse::OPCODE_REQUEST {
-                                        let target_ip_addr = Ipv4Addr::new(
-                                            slice.target_protocol_addr()[0],
-                                            slice.target_protocol_addr()[1],
-                                            slice.target_protocol_addr()[2],
-                                            slice.target_protocol_addr()[3]);
-                                        log::info!("ARP request for IP {}", target_ip_addr);
-
-                                        let mut buf_resp = [0u8; 14 + arp_parse::ARP_SIZE as usize];
-                                        let mut yagna_mac = [0u8; arp_parse::HARDWARE_SIZE_ETHERNET as usize];
-                                        let arp_response_builder = ARPSliceBuilder::new(&mut buf_resp[14..]).unwrap()
-                                            .op_code(arp_parse::OPCODE_REPLY).unwrap()
-                                            .sender_hardware_addr(&yagna_mac).unwrap()
-                                            .sender_protocol_addr(slice.target_protocol_addr()).unwrap()
-                                            .target_protocol_addr(slice.sender_protocol_addr()).unwrap()
-                                            .target_hardware_addr(slice.sender_hardware_addr()).unwrap();
-
-
-                                        buf_resp[0..6].copy_from_slice(&link.destination);
-                                        buf_resp[6..12].copy_from_slice( &link.source);
-                                        buf_resp[12..14].copy_from_slice( &(EtherType::Arp as u16).to_be_bytes());
-
-                                        log::info!("Sending ARP response to {} {:?}", addr, buf_resp);
-
-                                        let len = sock.send_to(&buf_resp, addr).await.unwrap();
-                                    }
-                                }
-                                else
-                                {
-                                    log::info!("Unknown link type {:?}", link.ether_type);
-                                }
-                            }
-                            //    let slice = arp_parse::parse(&buff).unwrap();
-                            //    let op_code = slice.op_code();
-                            //}
                             log::info!("vlan: {:?}", value.vlan);
                             log::info!("ip: {:?}", value.ip);
                             log::info!("transport: {:?}", value.transport);
+                            if let Some(link) = value.link {
+                                log::info!("link: {:?}", link);
+                                let ether_type = EtherType::from_u16(link.ether_type);
+                                match ether_type {
+                                    Some(EtherType::Ipv4 | EtherType::Ipv6) => {
+                                        if let Some(ip) = value.ip {
+                                            log::info!("ip: {:?}", ip);
+                                            match ip {
+                                                Version4(ip, _ipv4_extensions) => {
+                                                    match value.transport {
+                                                        Some(TransportHeader::Udp(udp_header)) => {
+                                                            let builder = PacketBuilder::ethernet2(
+                                                                link.source,
+                                                                link.destination,
+                                                            )
+                                                                .ipv4(
+                                                                    ip.destination,
+                                                                    ip.source,
+                                                                    ip.time_to_live,
+                                                                )
+                                                                .udp(
+                                                                    udp_header.destination_port,
+                                                                    udp_header.source_port
+                                                                ); //desitnation port
+                                                            // payload of the udp packet
+                                                            let payload = value.payload;
+                                                            // get some memory to store the serialized data
+                                                            let mut complete_packet =
+                                                                Vec::<u8>::with_capacity(builder.size(payload.len()));
+                                                            builder.write(&mut complete_packet, &payload).unwrap();
+
+                                                            log::info!("Sending packet: {:?}", complete_packet);
+                                                            let _ = sock.send_to(&complete_packet, addr).await;
+                                                            log::info!("udp: {:?}", udp_header);
+                                                        }
+                                                        Some(TransportHeader::Tcp(tcp_header)) => {
+                                                            log::info!("tcp: {:?}", tcp_header);
+                                                        }
+                                                        Some(TransportHeader::Icmpv4(icmp_header)) => {
+                                                            log::info!("icmp: {:?}", icmp_header);
+                                                        }
+                                                        Some(TransportHeader::Icmpv6(icmp_header)) => {
+                                                            log::info!("icmp: {:?}", icmp_header);
+                                                        }
+                                                        None => {
+                                                            log::info!("No transport header");
+                                                        }
+                                                    }
+                                                }
+                                                Version6(_ipv6_header, _ipv6_ext) => {
+                                                    log::info!("IpV6");
+                                                }
+                                            }
+                                        }
+                                    },
+                                    Some(EtherType::Arp) => {
+                                        let slice = arp_parse::parse(value.payload).unwrap();
+                                        let op_code = slice.op_code();
+                                        if op_code == arp_parse::OPCODE_REQUEST {
+                                            let target_ip_addr = Ipv4Addr::new(
+                                                slice.target_protocol_addr()[0],
+                                                slice.target_protocol_addr()[1],
+                                                slice.target_protocol_addr()[2],
+                                                slice.target_protocol_addr()[3],
+                                            );
+                                            log::info!("ARP request for IP {}", target_ip_addr);
+
+                                            let mut buf_resp = [0u8; 14 + arp_parse::ARP_SIZE as usize];
+                                            let yagna_mac =
+                                                [0u8; arp_parse::HARDWARE_SIZE_ETHERNET as usize];
+                                            let _arp_response_builder =
+                                                ARPSliceBuilder::new(&mut buf_resp[14..])
+                                                    .unwrap()
+                                                    .op_code(arp_parse::OPCODE_REPLY)
+                                                    .unwrap()
+                                                    .sender_hardware_addr(&yagna_mac)
+                                                    .unwrap()
+                                                    .sender_protocol_addr(slice.target_protocol_addr())
+                                                    .unwrap()
+                                                    .target_protocol_addr(slice.sender_protocol_addr())
+                                                    .unwrap()
+                                                    .target_hardware_addr(slice.sender_hardware_addr())
+                                                    .unwrap();
+
+                                            buf_resp[0..6].copy_from_slice(&link.destination);
+                                            buf_resp[6..12].copy_from_slice(&link.source);
+                                            buf_resp[12..14].copy_from_slice(
+                                                &(EtherType::Arp as u16).to_be_bytes(),
+                                            );
+
+                                            log::info!(
+                                            "Sending ARP response to {} {:?}",
+                                            addr,
+                                            buf_resp
+                                        );
+
+                                            let _len = sock.send_to(&buf_resp, addr).await.unwrap();
+                                        }
+                                    }
+                                    Some(_) => log::info!("Unknown link type {:?}", ether_type),
+                                    None => log::info!("Unknown link type"),
+                                };
+
+
+                                /*
+                                                                   {
+
+                                                                       use etherparse::{
+                                                                           Ethernet2Header, PacketBuilder, SerializedSize,
+                                                                       };
+                                                                       let builder = PacketBuilder::ethernet2(
+                                                                           [1, 2, 3, 4, 5, 6], //source mac
+                                                                           [7, 8, 9, 10, 11, 12],
+                                                                       ) //destionation mac
+                                                                       .ipv4(
+                                                                           [192, 168, 1, 1], //source ip
+                                                                           [192, 168, 1, 2], //desitionation ip
+                                                                           20,
+                                                                       ) //time to life
+                                                                       .udp(
+                                                                           21, //source port
+                                                                           1234,
+                                                                       ); //desitnation port
+                                                                          // payload of the udp packet
+                                                                       let payload = [1, 2, 3, 4, 5, 6, 7, 8];
+                                                                       // get some memory to store the serialized data
+                                                                       let mut complete_packet =
+                                                                           Vec::<u8>::with_capacity(builder.size(payload.len()));
+                                                                       builder.write(&mut complete_packet, &payload).unwrap();
+                                                                       // skip ethernet 2 header so we can parse from there downwards
+                                                                       let packet =
+                                                                           &complete_packet[Ethernet2Header::SERIALIZED_SIZE..];
+                                                                   }
+*/
                         }
                     }
 
                     //let len = sock.send_to(&buf[..len], addr).await.unwrap();
                     //ddprintln!("{:?} bytes sent", len);
                 }
-            });
+            }});
 
             //endpoint.connect(cep).await?;
             Ok(Some(serde_json::json!({
                 "endpoint": new_endpoint,
             })))
+
         }
         .boxed_local()
     }
