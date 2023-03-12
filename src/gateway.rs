@@ -165,53 +165,54 @@ impl Runtime for OutboundGatewayRuntime {
                     let ether_type = EtherType::from_u16(link.ether_type);
                     match ether_type {
                         Some(EtherType::Ipv4 | EtherType::Ipv6) => {
-                            if let Some(ip) = value.ip {
-                                log::info!("ip: {:?}", ip);
-                                match ip {
-                                    Version4(ip, _ipv4_extensions) => {
-                                        match value.transport {
-                                            Some(TransportHeader::Udp(udp_header)) => {
-                                                let builder = PacketBuilder::ethernet2(
-                                                    link.source,
-                                                    link.destination,
+                            match &value.ip {
+                                None => {
+                                    log::error!("No IP header found {:?}", link);
+                                    continue;
+                                }
+                                Some(Version4(ip, _ipv4_extensions)) => {
+                                    match value.transport {
+                                        Some(TransportHeader::Udp(udp_header)) => {
+                                            let builder = PacketBuilder::ethernet2(
+                                                link.source,
+                                                link.destination,
+                                            )
+                                                .ipv4(
+                                                    ip.destination,
+                                                    ip.source,
+                                                    ip.time_to_live,
                                                 )
-                                                    .ipv4(
-                                                        ip.destination,
-                                                        ip.source,
-                                                        ip.time_to_live,
-                                                    )
-                                                    .udp(
-                                                        udp_header.destination_port,
-                                                        udp_header.source_port
-                                                    ); //desitnation port
-                                                // payload of the udp packet
-                                                let payload = value.payload;
-                                                // get some memory to store the serialized data
-                                                let mut complete_packet =
-                                                    Vec::<u8>::with_capacity(builder.size(payload.len()));
-                                                builder.write(&mut complete_packet, &payload).unwrap();
+                                                .udp(
+                                                    udp_header.destination_port,
+                                                    udp_header.source_port
+                                                ); //desitnation port
+                                            // payload of the udp packet
+                                            let payload = value.payload;
+                                            // get some memory to store the serialized data
+                                            let mut complete_packet =
+                                                Vec::<u8>::with_capacity(builder.size(payload.len()));
+                                            builder.write(&mut complete_packet, &payload).unwrap();
 
-                                                log::info!("Sending packet: {:?}", complete_packet);
-                                                let _ = sock.send_to(&complete_packet, addr).await;
-                                                log::info!("udp: {:?}", udp_header);
-                                            }
-                                            Some(TransportHeader::Tcp(tcp_header)) => {
-                                                log::info!("tcp: {:?}", tcp_header);
-                                            }
-                                            Some(TransportHeader::Icmpv4(icmp_header)) => {
-                                                log::info!("icmp: {:?}", icmp_header);
-                                            }
-                                            Some(TransportHeader::Icmpv6(icmp_header)) => {
-                                                log::info!("icmp: {:?}", icmp_header);
-                                            }
-                                            None => {
-                                                log::info!("No transport header");
-                                            }
+                                            log::info!("Sending packet: {:?}", complete_packet);
+                                            let _ = sock.send_to(&complete_packet, addr).await;
+                                            log::info!("udp: {:?}", udp_header);
+                                        }
+                                        Some(TransportHeader::Tcp(tcp_header)) => {
+                                            log::info!("tcp: {:?}", tcp_header);
+                                        }
+                                        Some(TransportHeader::Icmpv4(icmp_header)) => {
+                                            log::info!("icmp: {:?}", icmp_header);
+                                        }
+                                        Some(TransportHeader::Icmpv6(icmp_header)) => {
+                                            log::info!("icmp: {:?}", icmp_header);
+                                        }
+                                        None => {
+                                            log::info!("No transport header");
                                         }
                                     }
-                                    Version6(_ipv6_header, _ipv6_ext) => {
-                                        log::info!("IpV6");
-                                    }
+                                }
+                                Some(Version6(_ipv6_header, _ipv6_ext)) => {
+                                    log::info!("IpV6");
                                 }
                             }
                         },
