@@ -164,10 +164,14 @@ impl Runtime for OutboundGatewayRuntime {
             //let r = Arc::new(socket);
             //let s = r.clone();
             let (udp_socket_write, mut rx_forward_to_socket) =
-                mpsc::channel::<(Vec<u8>, SocketAddr)>(1);
+                mpsc::channel::<(Vec<u8>)>(1);
+            let (set_addr, mut rx_get_addr) =
+                mpsc::channel::<(SocketAddr)>(1);
+
             let socket_ = socket.clone();
             tokio::spawn(async move {
-                while let Some((bytes, addr)) = rx_forward_to_socket.recv().await {
+                let addr = rx_get_addr.recv().await.unwrap();
+                while let Some(bytes) = rx_forward_to_socket.recv().await {
                     let len = socket_.send_to(&bytes, &addr).await.unwrap();
                     println!("{:?} bytes sent", len);
                 }
@@ -254,10 +258,15 @@ impl Runtime for OutboundGatewayRuntime {
             tokio::spawn(async move {
                 let mut buf_box = Box::new([0; 70000]); //sufficient to hold max UDP packet
                 let buf = &mut *buf_box;
+                let mut is_addr_sent = false;
                 loop {
                     let (len, addr) = socket.recv_from(buf).await.unwrap();
                     log::info!("{len:?} bytes received from {addr:?}");
                     log::info!("Packet content {:?}", &buf[..len]);
+                    if !is_addr_sent {
+                        set_addr.send(addr).await.unwrap();
+                        is_addr_sent = true;
+                    }
 
                     let value = match PacketHeaders::from_ethernet_slice(&buf[..len]) {
                         Err(value) => {
@@ -311,7 +320,7 @@ impl Runtime for OutboundGatewayRuntime {
                                                     .unwrap();
                                                 log::info!("Sending packet: {:?}", complete_packet);
                                                 let _ = udp_socket_write
-                                                    .send((complete_packet, addr))
+                                                    .send(complete_packet)
                                                     .await;
                                                 log::info!("udp: {:?}", udp_header);
                                             } else {
@@ -396,7 +405,7 @@ impl Runtime for OutboundGatewayRuntime {
                                 log::info!("Sending ARP response to {} {:?}", addr, buf_resp);
 
                                 let _len = udp_socket_write
-                                    .send((buf_resp.to_vec(), addr))
+                                    .send(buf_resp.to_vec())
                                     .await
                                     .unwrap();
                             }
