@@ -152,7 +152,7 @@ impl Runtime for OutboundGatewayRuntime {
             .name(vpn_interface_name)
             .up();
 
-        let echo_server = true;
+        let echo_server = false;
         // TODO: Here we should start listening on the same protocol as ExeUnit.
         async move {
             //let tun =
