@@ -1,15 +1,19 @@
 use anyhow::bail;
 use arp_parse::ARPSliceBuilder;
-use futures::{FutureExt};
+use futures::{FutureExt, SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
-use std::net::{Ipv4Addr, SocketAddr};
+use std::io::Bytes;
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::process::Stdio;
+use std::sync::Arc;
 use structopt::StructOpt;
 use tokio::net::UdpSocket;
 use url::Url;
 
-use etherparse::{EtherType, PacketBuilder, PacketHeaders, TransportHeader};
 use etherparse::IpHeader::{Version4, Version6};
+use etherparse::{EtherType, PacketBuilder, PacketHeaders, TransportHeader};
+use tokio::sync::mpsc;
+use tun::TunPacket;
 use ya_relay_stack::packet::{IpPacket, IpV4Field, PeekPacket, UdpField, UdpPacket};
 use ya_relay_stack::Protocol;
 
@@ -128,73 +132,100 @@ impl Runtime for OutboundGatewayRuntime {
         let new_endpoint = ContainerEndpoint::UdpDatagram(socket_addr);
         self.vpn = Some(new_endpoint.clone());
 
+        let vpn_network_addr = "192.168.8.7";
+        let vpn_network_mask = "255.255.255.0";
+        let vpn_layer = "tun".to_string();
+
+        let addr = vpn_network_addr.parse::<IpAddr>().unwrap();
+        let mask = vpn_network_mask.parse::<IpAddr>().unwrap();
+        let vpn_interface_name = "vpn0";
+        let mut config = tun::Configuration::default();
+        let vpn_layer = match vpn_layer.as_str() {
+            "tun" => tun::Layer::L3,
+            "tap" => tun::Layer::L2,
+            _ => panic!("Invalid vpn layer"),
+        };
+        config
+            .layer(vpn_layer)
+            .address(addr)
+            .netmask(mask)
+            .name(vpn_interface_name)
+            .up();
+
+        let echo_server = true;
         // TODO: Here we should start listening on the same protocol as ExeUnit.
         async move {
+            //let tun =
+            let socket = Arc::new(UdpSocket::bind(socket_addr).await.unwrap());
+
+            log::info!("Listening on: {}", socket.local_addr().unwrap());
+            let dev = tun::create_as_async(&config).unwrap();
+            let (mut tun_write, mut tun_read) = dev.into_framed().split();
+            //let r = Arc::new(socket);
+            //let s = r.clone();
+            let (udp_socket_write, mut rx_forward_to_socket) =
+                mpsc::channel::<(Vec<u8>, SocketAddr)>(1);
+            let socket_ = socket.clone();
             tokio::spawn(async move {
-                let sock = UdpSocket::bind(socket_addr).await.unwrap();
-                log::info!("Listening on: {}", sock.local_addr().unwrap());
+                while let Some((bytes, addr)) = rx_forward_to_socket.recv().await {
+                    let len = socket_.send_to(&bytes, &addr).await.unwrap();
+                    println!("{:?} bytes sent", len);
+                }
+            });
+            let socket_ = socket.clone();
+            tokio::spawn(async move {
                 let mut buf_box = Box::new([0; 70000]); //sufficient to hold max UDP packet
                 let buf = &mut *buf_box;
                 loop {
-                    let (len, addr) = sock.recv_from(buf).await.unwrap();
-                    log::info!("{len:?} bytes received from {addr:?}");
-                    log::info!("Packet content {:?}", &buf[..len]);
-
-
-                    let value = match PacketHeaders::from_ethernet_slice(&buf[..len]) {
-                        Err(value) => {
-                            log::warn!("Failed to parse/read packet {:?}", value);
-                            continue;
-                        },
-                        Ok(value) => value
-                    };
-
-                    log::info!("link: {:?}", value.link);
-                    log::info!("vlan: {:?}", value.vlan);
-                    log::info!("ip: {:?}", value.ip);
-                    log::info!("transport: {:?}", value.transport);
-
-
-                    let link = if let Some(link) = value.link {
-                        link
-                    } else {
-                        log::warn!("No ethernet header found {:?}", value);
-                        continue;
-                    };
-
-                    let ether_type = EtherType::from_u16(link.ether_type);
-                    match ether_type {
-                        Some(EtherType::Ipv4 | EtherType::Ipv6) => {
-                            match &value.ip {
+                    if let Some(Ok(packet)) = tun_read.next().await {
+                        if let Ok(packet) =
+                            etherparse::PacketHeaders::from_ip_slice(&packet.get_bytes())
+                        {
+                            match &packet.ip {
                                 None => {
-                                    log::error!("No IP header found {:?}", link);
-                                    continue;
+                                    log::error!("No IP header found");
                                 }
                                 Some(Version4(ip, _ipv4_extensions)) => {
-                                    match value.transport {
+                                    match packet.transport {
                                         Some(TransportHeader::Udp(udp_header)) => {
                                             let builder = PacketBuilder::ethernet2(
-                                                link.source,
-                                                link.destination,
+                                                [1, 1, 1, 1, 1, 1],
+                                                [2, 2, 2, 2, 2, 2],
                                             )
-                                                .ipv4(
-                                                    ip.destination,
-                                                    ip.source,
-                                                    ip.time_to_live,
-                                                )
-                                                .udp(
-                                                    udp_header.destination_port,
-                                                    udp_header.source_port
-                                                ); //desitnation port
-                                            // payload of the udp packet
-                                            let payload = value.payload;
+                                            .ipv4(ip.source, ip.destination, ip.time_to_live)
+                                            .udp(
+                                                udp_header.source_port,
+                                                udp_header.destination_port,
+                                            ); //desitnation port
+
+                                            log::info!(
+                                                "Source ip: {:?}, dest ip: {:?}",
+                                                ip.source,
+                                                ip.destination
+                                            ); // payload of the udp packet
+                                            let payload = packet.payload;
                                             // get some memory to store the serialized data
-                                            let mut complete_packet =
-                                                Vec::<u8>::with_capacity(builder.size(payload.len()));
+                                            let mut complete_packet = Vec::<u8>::with_capacity(
+                                                builder.size(payload.len()),
+                                            );
                                             builder.write(&mut complete_packet, &payload).unwrap();
 
-                                            log::info!("Sending packet: {:?}", complete_packet);
-                                            let _ = sock.send_to(&complete_packet, addr).await;
+                                            log::info!(
+                                                "Sending wrapped eth packet: {:?}",
+                                                complete_packet
+                                            );
+                                            if let Err(err) = socket_
+                                                .send_to(
+                                                    &complete_packet,
+                                                    SocketAddr::from(([127, 0, 0, 1], 52001)),
+                                                )
+                                                .await
+                                            {
+                                                log::error!(
+                                                    "Error sending packet to websocket: {:?}",
+                                                    err
+                                                );
+                                            }
                                             log::info!("udp: {:?}", udp_header);
                                         }
                                         Some(TransportHeader::Tcp(tcp_header)) => {
@@ -215,7 +246,120 @@ impl Runtime for OutboundGatewayRuntime {
                                     log::info!("IpV6");
                                 }
                             }
-                        },
+                        }
+                    }
+                }
+            });
+
+            tokio::spawn(async move {
+                let mut buf_box = Box::new([0; 70000]); //sufficient to hold max UDP packet
+                let buf = &mut *buf_box;
+                loop {
+                    let (len, addr) = socket.recv_from(buf).await.unwrap();
+                    log::info!("{len:?} bytes received from {addr:?}");
+                    log::info!("Packet content {:?}", &buf[..len]);
+
+                    let value = match PacketHeaders::from_ethernet_slice(&buf[..len]) {
+                        Err(value) => {
+                            log::warn!("Failed to parse/read packet {:?}", value);
+                            continue;
+                        }
+                        Ok(value) => value,
+                    };
+
+                    log::info!("link: {:?}", value.link);
+                    log::info!("vlan: {:?}", value.vlan);
+                    log::info!("ip: {:?}", value.ip);
+                    log::info!("transport: {:?}", value.transport);
+
+                    let link = if let Some(link) = value.link {
+                        link
+                    } else {
+                        log::warn!("No ethernet header found {:?}", value);
+                        continue;
+                    };
+
+                    let ether_type = EtherType::from_u16(link.ether_type);
+                    match ether_type {
+                        Some(EtherType::Ipv4 | EtherType::Ipv6) => {
+                            match &value.ip {
+                                None => {
+                                    log::error!("No IP header found {:?}", link);
+                                    continue;
+                                }
+                                Some(Version4(ip, _ipv4_extensions)) => {
+                                    match value.transport {
+                                        Some(TransportHeader::Udp(udp_header)) => {
+                                            if echo_server {
+                                                let builder = PacketBuilder::ethernet2(
+                                                    link.source,
+                                                    link.destination,
+                                                )
+                                                .ipv4(ip.destination, ip.source, ip.time_to_live)
+                                                .udp(
+                                                    udp_header.destination_port,
+                                                    udp_header.source_port,
+                                                ); //destination port
+                                                   // payload of the udp packet
+                                                let payload = value.payload;
+                                                // get some memory to store the serialized data
+                                                let mut complete_packet = Vec::<u8>::with_capacity(
+                                                    builder.size(payload.len()),
+                                                );
+                                                builder
+                                                    .write(&mut complete_packet, &payload)
+                                                    .unwrap();
+                                                log::info!("Sending packet: {:?}", complete_packet);
+                                                let _ = udp_socket_write
+                                                    .send((complete_packet, addr))
+                                                    .await;
+                                                log::info!("udp: {:?}", udp_header);
+                                            } else {
+                                                let builder = PacketBuilder::ipv4(
+                                                    ip.source,
+                                                    ip.destination,
+                                                    ip.time_to_live,
+                                                )
+                                                .udp(
+                                                    udp_header.source_port,
+                                                    udp_header.destination_port,
+                                                ); //destination port
+                                                   // payload of the udp packet
+                                                let payload = value.payload;
+                                                // get some memory to store the serialized data
+                                                let mut complete_packet = Vec::<u8>::with_capacity(
+                                                    builder.size(payload.len()),
+                                                );
+                                                builder
+                                                    .write(&mut complete_packet, &payload)
+                                                    .unwrap();
+                                                log::info!("Sending packet: {:?}", complete_packet);
+                                                let _ = tun_write
+                                                    .send(TunPacket::new(complete_packet))
+                                                    .await;
+                                                //se((complete_packet, addr)).await;
+                                                log::info!("udp: {:?}", udp_header);
+                                            }
+                                        }
+                                        Some(TransportHeader::Tcp(tcp_header)) => {
+                                            log::info!("tcp: {:?}", tcp_header);
+                                        }
+                                        Some(TransportHeader::Icmpv4(icmp_header)) => {
+                                            log::info!("icmp: {:?}", icmp_header);
+                                        }
+                                        Some(TransportHeader::Icmpv6(icmp_header)) => {
+                                            log::info!("icmp: {:?}", icmp_header);
+                                        }
+                                        None => {
+                                            log::info!("No transport header");
+                                        }
+                                    }
+                                }
+                                Some(Version6(_ipv6_header, _ipv6_ext)) => {
+                                    log::info!("IpV6");
+                                }
+                            }
+                        }
                         Some(EtherType::Arp) => {
                             let slice = arp_parse::parse(value.payload).unwrap();
                             let op_code = slice.op_code();
@@ -229,8 +373,7 @@ impl Runtime for OutboundGatewayRuntime {
                                 log::info!("ARP request for IP {}", target_ip_addr);
 
                                 let mut buf_resp = [0u8; 14 + arp_parse::ARP_SIZE as usize];
-                                let yagna_mac =
-                                    [0u8; arp_parse::HARDWARE_SIZE_ETHERNET as usize];
+                                let yagna_mac = [0u8; arp_parse::HARDWARE_SIZE_ETHERNET as usize];
                                 let _arp_response_builder =
                                     ARPSliceBuilder::new(&mut buf_resp[14..])
                                         .unwrap()
@@ -247,17 +390,15 @@ impl Runtime for OutboundGatewayRuntime {
 
                                 buf_resp[0..6].copy_from_slice(&link.destination);
                                 buf_resp[6..12].copy_from_slice(&link.source);
-                                buf_resp[12..14].copy_from_slice(
-                                    &(EtherType::Arp as u16).to_be_bytes(),
-                                );
+                                buf_resp[12..14]
+                                    .copy_from_slice(&(EtherType::Arp as u16).to_be_bytes());
 
-                                log::info!(
-                                "Sending ARP response to {} {:?}",
-                                addr,
-                                buf_resp
-                            );
+                                log::info!("Sending ARP response to {} {:?}", addr, buf_resp);
 
-                                let _len = sock.send_to(&buf_resp, addr).await.unwrap();
+                                let _len = udp_socket_write
+                                    .send((buf_resp.to_vec(), addr))
+                                    .await
+                                    .unwrap();
                             }
                         }
                         Some(_) => log::info!("Unknown link type {:?}", ether_type),
@@ -270,7 +411,6 @@ impl Runtime for OutboundGatewayRuntime {
             Ok(Some(serde_json::json!({
                 "endpoint": new_endpoint,
             })))
-
         }
         .boxed_local()
     }

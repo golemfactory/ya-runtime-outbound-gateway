@@ -26,6 +26,8 @@ tokio = { version = "1", features = ["process", "macros", "time", "rt-multi-thre
 url = "2.3.1"
 etherparse = "0.13.0"
 arp-parse = "0.1.0"
+# fork contains for know fixes to compilation on Windows
+tun = { version = "0.5.5", features = ["async"], git = "https://github.com/scx1332/golem-rust-tun.git" }
 
 
 [profile.release]
