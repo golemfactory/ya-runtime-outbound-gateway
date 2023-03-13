@@ -2,7 +2,6 @@ use anyhow::bail;
 use arp_parse::ARPSliceBuilder;
 use futures::{FutureExt, SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
-use std::io::Bytes;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::process::Stdio;
 use std::sync::Arc;
@@ -163,23 +162,22 @@ impl Runtime for OutboundGatewayRuntime {
             let (mut tun_write, mut tun_read) = dev.into_framed().split();
             //let r = Arc::new(socket);
             //let s = r.clone();
-            let (udp_socket_write, mut rx_forward_to_socket) =
-                mpsc::channel::<(Vec<u8>)>(1);
+            let (udp_socket_write_, mut rx_forward_to_socket) =
+                mpsc::channel::<Vec<u8>>(1);
             let (set_addr, mut rx_get_addr) =
-                mpsc::channel::<(SocketAddr)>(1);
+                mpsc::channel::<SocketAddr>(1);
 
             let socket_ = socket.clone();
             tokio::spawn(async move {
                 let addr = rx_get_addr.recv().await.unwrap();
                 while let Some(bytes) = rx_forward_to_socket.recv().await {
-                    let len = socket_.send_to(&bytes, &addr).await.unwrap();
-                    println!("{:?} bytes sent", len);
+                    log::info!("Sending {:?} bytes to {:?}", bytes, addr);
+                    let _len = socket_.send_to(&bytes, &addr).await.unwrap();
                 }
             });
             let socket_ = socket.clone();
+            let udp_socket_write = udp_socket_write_.clone();
             tokio::spawn(async move {
-                let mut buf_box = Box::new([0; 70000]); //sufficient to hold max UDP packet
-                let buf = &mut *buf_box;
                 loop {
                     if let Some(Ok(packet)) = tun_read.next().await {
                         if let Ok(packet) =
@@ -218,12 +216,7 @@ impl Runtime for OutboundGatewayRuntime {
                                                 "Sending wrapped eth packet: {:?}",
                                                 complete_packet
                                             );
-                                            if let Err(err) = socket_
-                                                .send_to(
-                                                    &complete_packet,
-                                                    SocketAddr::from(([127, 0, 0, 1], 52001)),
-                                                )
-                                                .await
+                                            if let Err(err) = udp_socket_write.send(complete_packet).await
                                             {
                                                 log::error!(
                                                     "Error sending packet to websocket: {:?}",
@@ -254,6 +247,7 @@ impl Runtime for OutboundGatewayRuntime {
                     }
                 }
             });
+            let udp_socket_write = udp_socket_write_;
 
             tokio::spawn(async move {
                 let mut buf_box = Box::new([0; 70000]); //sufficient to hold max UDP packet
@@ -342,12 +336,10 @@ impl Runtime for OutboundGatewayRuntime {
                                                 builder
                                                     .write(&mut complete_packet, &payload)
                                                     .unwrap();
-                                                log::info!("Sending packet: {:?}", complete_packet);
+                                                log::info!("Writing packet to TUN: {:?} {:?}", complete_packet, udp_header);
                                                 let _ = tun_write
                                                     .send(TunPacket::new(complete_packet))
                                                     .await;
-                                                //se((complete_packet, addr)).await;
-                                                log::info!("udp: {:?}", udp_header);
                                             }
                                         }
                                         Some(TransportHeader::Tcp(tcp_header)) => {
