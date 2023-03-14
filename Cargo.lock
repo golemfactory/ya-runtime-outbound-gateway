@@ -2205,8 +2205,7 @@ dependencies = [
 [[package]]
 name = "ya-relay-stack"
 version = "0.4.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "60a6697ae691e31718f517e7d1e744d26b1fee94a3ccfaa41a732ae10778742f"
+source = "git+https://github.com/golemfactory/ya-relay.git?rev=d14101b#d14101bf16ee8414ad6f68e0487710a13dd448b5"
 dependencies = [
  "derive_more",
  "futures",
@@ -2260,6 +2259,7 @@ dependencies = [
  "arp-parse",
  "etherparse",
  "futures",
+ "hex",
  "log",
  "serde",
  "serde_json",
