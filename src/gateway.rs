@@ -18,7 +18,7 @@ use ya_relay_stack::Protocol;
 use ya_runtime_sdk::error::Error;
 use ya_runtime_sdk::server::ContainerEndpoint;
 use ya_runtime_sdk::*;
-use crate::iptables::{create_vpn_config, generate_interface_subnet_and_name, SubnetIpv4Info};
+use crate::iptables::{create_vpn_config, generate_interface_subnet_and_name, iptables_route_to_interface, SubnetIpv4Info};
 use crate::packet_conv::{packet_ether_to_ip_slice, packet_ip_wrap_to_ether};
 
 use crate::routing::RoutingTable;
@@ -102,6 +102,8 @@ impl Runtime for OutboundGatewayRuntime {
 
             log::info!("Listening on: {}", socket.local_addr().unwrap());
             let dev = tun::create_as_async(&tun_config).unwrap();
+            iptables_route_to_interface("eth0", &vpn_subnet_info.interface_name).unwrap();
+
             let (mut tun_write, mut tun_read) = dev.into_framed().split();
             //let r = Arc::new(socket);
             //let s = r.clone();
