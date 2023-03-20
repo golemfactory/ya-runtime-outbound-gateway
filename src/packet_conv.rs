@@ -1,6 +1,8 @@
 use ya_relay_stack::packet::{EtherField, IpPacket, IpV4Field, PeekPacket};
 use ya_relay_stack::Error;
 
+
+//todo implement proper subnet translation, not only 255.255.255.0
 fn translate_address(addr: &mut[u8], src_subnet: &[u8; 4], dst_subnet: &[u8; 4]) {
     if addr[0] == src_subnet[0] && addr[1] == src_subnet[1] && addr[2] == src_subnet[2] {
         addr[0] = dst_subnet[0];
@@ -46,8 +48,10 @@ pub fn packet_ip_wrap_to_ether(
             const ETHER_TYPE_IPV4: &[u8; 2] = &[0x08, 0x00];
             eth_packet[EtherField::ETHER_TYPE].copy_from_slice(ETHER_TYPE_IPV4);
             if let (Some(src_subnet), Some(dst_subnet)) = (src_subnet, dst_subnet) {
-                translate_address(&mut eth_packet[(14+12)..(14+16)], src_subnet, dst_subnet);
-                translate_address(&mut eth_packet[(14+16)..(14+20)], src_subnet, dst_subnet);
+                const ETHER_IP_SRC_ADDR: std::ops::Range<usize> = (14+12)..(14+16);
+                const ETHER_IP_DST_ADDR: std::ops::Range<usize> = (14+16)..(14+20);
+                translate_address(&mut eth_packet[ETHER_IP_SRC_ADDR], src_subnet, dst_subnet);
+                translate_address(&mut eth_packet[ETHER_IP_DST_ADDR], src_subnet, dst_subnet);
             }
         }
         IpPacket::V6(_pkt) => {
@@ -76,8 +80,8 @@ pub fn packet_ether_to_ip_slice<'a, 'b>(eth_packet: &'a mut[u8], src_subnet: Opt
         match IpPacket::packet(ip_frame) {
             IpPacket::V4(pkt) => {
                 if let (Some(src_subnet), Some(dst_subnet)) = (src_subnet, dst_subnet) {
-                    translate_address(&mut ip_frame[(12)..(16)], src_subnet, dst_subnet);
-                    translate_address(&mut ip_frame[(16)..(20)], src_subnet, dst_subnet);
+                    translate_address(&mut ip_frame[IpV4Field::SRC_ADDR], src_subnet, dst_subnet);
+                    translate_address(&mut ip_frame[IpV4Field::DST_ADDR], src_subnet, dst_subnet);
                 }
             }
             IpPacket::V6(_pkt) => {
