@@ -1050,6 +1050,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e5ce46fe64a9d73be07dcbe690a38ce1b293be448fd8ce1e6c1b8062c9f72c6a"
 
 [[package]]
+name = "network-interface"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "10c4dbf727f42893b058d7619d5b4da3743dfe9cdb6e440880f7717a68b57e0e"
+dependencies = [
+ "cc",
+ "libc",
+ "thiserror",
+ "winapi",
+]
+
+[[package]]
 name = "nu-ansi-term"
 version = "0.46.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2261,6 +2273,8 @@ dependencies = [
  "futures",
  "hex",
  "log",
+ "network-interface",
+ "rand 0.8.5",
  "serde",
  "serde_json",
  "structopt",

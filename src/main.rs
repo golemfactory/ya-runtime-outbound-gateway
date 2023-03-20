@@ -1,5 +1,6 @@
 mod gateway;
 mod routing;
+mod iptables;
 
 use gateway::OutboundGatewayRuntime;
 

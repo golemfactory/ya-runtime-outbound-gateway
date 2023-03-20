@@ -1,4 +1,9 @@
+use std::net::Ipv4Addr;
 use std::process::{Command, Stdio};
+use std::str::FromStr;
+use network_interface::{NetworkInterface, NetworkInterfaceConfig};
+use rand::Rng;
+use serde::Serialize;
 
 pub struct IpTablesRule {
     table: String,
@@ -142,4 +147,78 @@ pub fn iptables_route_to_interface(
         iptables_add_rule(rule)?;
     }
     Ok(rules_to_delete_later)
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct SubnetIpv4Info {
+    subnet: Ipv4Addr,
+    mask: Ipv4Addr,
+    node_ip: Ipv4Addr,
+    interface_name: String,
+}
+
+pub fn generate_interface_subnet_and_name(ip_suffix: u8) -> std::io::Result<SubnetIpv4Info> {
+    let mut rng = rand::thread_rng();
+    const VPN_BASE: &str = "10.94";
+    const VPN_INTERFACE_NAME_BASE: &str = "vpn_10_94";
+
+    let network_interfaces = match NetworkInterface::show() {
+        Ok(interfaces) => interfaces,
+        Err(err) => {
+            log::error!("Error getting network interfaces: {err:?}");
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::Other,
+                format!("Error getting network interfaces {err:?}",
+                )));
+        }
+    };
+
+    let mut tries = 0;
+    let si = loop {
+        tries += 1;
+
+        if tries > 100 {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::Other,
+                "Could not find free subnet",
+            ));
+        }
+
+        //10.8.X.X and 10.66.X.X is used in openvpn
+        //selected 10.94.X.X for our vpn
+        let number = rng.gen_range(0..255);
+
+
+        let device_name = format!("{VPN_INTERFACE_NAME_BASE}_{number}");
+        if let Some(ni) = network_interfaces.iter().find(|ni| ni.name == device_name) {
+            continue;
+        }
+        let subnet_part = format!(
+            "{}.{}",
+            VPN_BASE,
+            number,
+        );
+        let mask = "255.255.255.0";
+        let subnet = format!("{}.0", subnet_part);
+        let node_ip = format!("{}.{}", subnet_part, ip_suffix);
+
+        let si = SubnetIpv4Info {
+            subnet: Ipv4Addr::from_str(&subnet).expect("Cannot fail, invalid ip address"),
+            mask: Ipv4Addr::from_str(&mask).expect("Cannot fail, invalid ip address"),
+            interface_name: device_name,
+            node_ip: Ipv4Addr::from_str(&node_ip).expect("Cannot fail, invalid ip address")
+        };
+        break si
+    };
+    Ok(si)
+}
+
+pub fn create_vpn_config(si: &SubnetIpv4Info) -> tun::Configuration {
+    let mut config = tun::Configuration::default();
+    config.layer(tun::Layer::L3)
+        .address(si.node_ip)
+        .netmask(si.mask)
+        .name(&si.interface_name)
+        .up();
+    config
 }

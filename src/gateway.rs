@@ -17,6 +17,7 @@ use ya_relay_stack::Protocol;
 use ya_runtime_sdk::error::Error;
 use ya_runtime_sdk::server::ContainerEndpoint;
 use ya_runtime_sdk::*;
+use crate::iptables::{create_vpn_config, generate_interface_subnet_and_name};
 
 use crate::routing::RoutingTable;
 
@@ -39,51 +40,6 @@ pub struct OutboundGatewayRuntime {
     pub routing: RoutingTable,
 }
 
-fn _reverse_udp(frame: &Vec<u8>) -> anyhow::Result<Vec<u8>> {
-    let ip_packet = match IpPacket::peek(frame) {
-        Ok(_) => IpPacket::packet(frame),
-        _ => bail!("Error peeking IP packet"),
-    };
-
-    if ip_packet.protocol() != Protocol::Udp as u8 {
-        return Ok(frame.to_vec());
-    }
-
-    let src = ip_packet.src_address();
-    let dst = ip_packet.dst_address();
-
-    println!("Src: {:?}, Dst: {:?}", src, dst);
-
-    let udp_data = ip_packet.payload();
-    let _udp_data_len = udp_data.len();
-
-    let udp_packet = match UdpPacket::peek(udp_data) {
-        Ok(_) => UdpPacket::packet(udp_data),
-        _ => bail!("Error peeking UDP packet"),
-    };
-
-    let src_port = udp_packet.src_port();
-    let dst_port = udp_packet.dst_port();
-    println!("Src port: {:?}, Dst port: {:?}", src_port, dst_port);
-
-    let content = &udp_data[UdpField::PAYLOAD];
-
-    match std::str::from_utf8(content) {
-        Ok(content_str) => println!("Content (string): {content_str:?}"),
-        Err(_e) => println!("Content (binary): {:?}", content),
-    };
-
-    let mut reversed = frame.clone();
-    reversed[IpV4Field::SRC_ADDR].copy_from_slice(&dst);
-    reversed[IpV4Field::DST_ADDR].copy_from_slice(&src);
-
-    let reversed_udp_data = &mut reversed[ip_packet.payload_off()..];
-
-    reversed_udp_data[UdpField::SRC_PORT].copy_from_slice(&udp_data[UdpField::DST_PORT]);
-    reversed_udp_data[UdpField::DST_PORT].copy_from_slice(&udp_data[UdpField::SRC_PORT]);
-
-    Ok(reversed)
-}
 
 impl Runtime for OutboundGatewayRuntime {
     fn deploy<'a>(&mut self, _: &mut Context<Self>) -> OutputResponse<'a> {
@@ -129,26 +85,11 @@ impl Runtime for OutboundGatewayRuntime {
         let new_endpoint = ContainerEndpoint::UdpDatagram(socket_addr);
         self.vpn = Some(new_endpoint.clone());
 
-        let vpn_network_addr = "192.168.8.7";
-        let vpn_network_mask = "255.255.255.0";
-        let vpn_layer = "tun".to_string();
+        let vpn_subnet_info = generate_interface_subnet_and_name(7).unwrap();
 
-        let addr = vpn_network_addr.parse::<IpAddr>().unwrap();
-        let mask = vpn_network_mask.parse::<IpAddr>().unwrap();
-        let vpn_interface_name = "vpn0";
-        let mut config = tun::Configuration::default();
-        let vpn_layer = match vpn_layer.as_str() {
-            "tun" => tun::Layer::L3,
-            "tap" => tun::Layer::L2,
-            _ => panic!("Invalid vpn layer"),
-        };
-        config
-            .layer(vpn_layer)
-            .address(addr)
-            .netmask(mask)
-            .name(vpn_interface_name)
-            .up();
+        log::info!("VPN subnet: {vpn_subnet_info:?}");
 
+        let mut tun_config = create_vpn_config(&vpn_subnet_info);
         let _echo_server = false;
         // TODO: Here we should start listening on the same protocol as ExeUnit.
         async move {
@@ -156,7 +97,7 @@ impl Runtime for OutboundGatewayRuntime {
             let socket = Arc::new(UdpSocket::bind(socket_addr).await.unwrap());
 
             log::info!("Listening on: {}", socket.local_addr().unwrap());
-            let dev = tun::create_as_async(&config).unwrap();
+            let dev = tun::create_as_async(&tun_config).unwrap();
             let (mut tun_write, mut tun_read) = dev.into_framed().split();
             //let r = Arc::new(socket);
             //let s = r.clone();
@@ -296,6 +237,7 @@ impl Runtime for OutboundGatewayRuntime {
             //endpoint.connect(cep).await?;
             Ok(Some(serde_json::json!({
                 "endpoint": new_endpoint,
+                "vpn-subnet-info": vpn_subnet_info,
             })))
         }
         .boxed_local()
