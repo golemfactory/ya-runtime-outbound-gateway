@@ -151,10 +151,10 @@ pub fn iptables_route_to_interface(
 
 #[derive(Debug, Clone, Serialize)]
 pub struct SubnetIpv4Info {
-    subnet: Ipv4Addr,
-    mask: Ipv4Addr,
-    node_ip: Ipv4Addr,
-    interface_name: String,
+    pub subnet: Ipv4Addr,
+    pub mask: Ipv4Addr,
+    pub node_ip: Ipv4Addr,
+    pub interface_name: String,
 }
 
 pub fn generate_interface_subnet_and_name(ip_suffix: u8) -> std::io::Result<SubnetIpv4Info> {

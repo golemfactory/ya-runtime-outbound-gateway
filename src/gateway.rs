@@ -2,8 +2,9 @@ use anyhow::bail;
 
 use futures::{FutureExt, SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
-use std::net::{IpAddr, SocketAddr};
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::process::Stdio;
+use std::str::FromStr;
 use std::sync::Arc;
 use structopt::StructOpt;
 use tokio::net::UdpSocket;
@@ -17,7 +18,8 @@ use ya_relay_stack::Protocol;
 use ya_runtime_sdk::error::Error;
 use ya_runtime_sdk::server::ContainerEndpoint;
 use ya_runtime_sdk::*;
-use crate::iptables::{create_vpn_config, generate_interface_subnet_and_name};
+use crate::iptables::{create_vpn_config, generate_interface_subnet_and_name, SubnetIpv4Info};
+use crate::packet_conv::{packet_ether_to_ip_slice, packet_ip_wrap_to_ether};
 
 use crate::routing::RoutingTable;
 
@@ -38,6 +40,7 @@ pub struct GatewayConf {}
 pub struct OutboundGatewayRuntime {
     pub vpn: Option<ContainerEndpoint>,
     pub routing: RoutingTable,
+    pub vpn_subnet_info: Option<SubnetIpv4Info>,
 }
 
 
@@ -86,6 +89,7 @@ impl Runtime for OutboundGatewayRuntime {
         self.vpn = Some(new_endpoint.clone());
 
         let vpn_subnet_info = generate_interface_subnet_and_name(7).unwrap();
+        self.vpn_subnet_info = Some(vpn_subnet_info.clone());
 
         log::info!("VPN subnet: {vpn_subnet_info:?}");
 
@@ -104,6 +108,7 @@ impl Runtime for OutboundGatewayRuntime {
             let (udp_socket_write_, mut rx_forward_to_socket) = mpsc::channel::<Vec<u8>>(1);
             let (set_addr, mut rx_get_addr) = mpsc::channel::<SocketAddr>(1);
 
+            let yagna_subnet = Ipv4Addr::from_str("192.168.8.0").unwrap();
             let socket_ = socket.clone();
             tokio::spawn(async move {
                 let addr = rx_get_addr.recv().await.unwrap();
@@ -118,10 +123,12 @@ impl Runtime for OutboundGatewayRuntime {
                 loop {
                     if let Some(Ok(packet)) = tun_read.next().await {
                         //todo: add mac addresses
-                        match ya_relay_stack::packet_ip_wrap_to_ether(
+                        match packet_ip_wrap_to_ether(
                             &packet.get_bytes(),
                             None,
                             None,
+                                Some(&vpn_subnet_info.subnet.octets()),
+                            Some(&yagna_subnet.octets()),
                         ) {
                             Ok(ether_packet) => {
                                 if let Err(err) = udp_socket_write.send(ether_packet).await {
@@ -149,7 +156,10 @@ impl Runtime for OutboundGatewayRuntime {
                         set_addr.send(addr).await.unwrap();
                         is_addr_sent = true;
                     }
-                    match ya_relay_stack::packet_ether_to_ip_slice(&buf[..len]) {
+                    match packet_ether_to_ip_slice(&mut buf[..len],
+                                                   Some(&yagna_subnet.octets()),
+                                                   Some(&vpn_subnet_info.subnet.octets()),
+                    ) {
                         Ok(ip_slice) => {
                             log::info!("IP packet: {:?}", ip_slice);
                             if let Err(err) =
