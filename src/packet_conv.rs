@@ -62,8 +62,6 @@ pub fn packet_ip_wrap_to_ether(
                 if translated {
                     compute_ipv4_checksum_in_place(&mut eth_packet[14..]);
                 }
-                const ETHER_IP_CHECKSUM: std::ops::Range<usize> = (14+10)..(14+12);
-                eth_packet[ETHER_IP_CHECKSUM].copy_from_slice(&[0, 0]);
             }
         }
         IpPacket::V6(_pkt) => {
