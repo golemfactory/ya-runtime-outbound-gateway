@@ -159,8 +159,8 @@ pub struct SubnetIpv4Info {
 
 pub fn generate_interface_subnet_and_name(ip_suffix: u8) -> std::io::Result<SubnetIpv4Info> {
     let mut rng = rand::thread_rng();
-    const VPN_BASE: &str = "10.94";
-    const VPN_INTERFACE_NAME_BASE: &str = "vpn_10_94";
+    const VPN_BASE: &str = "192.168";
+    const VPN_INTERFACE_NAME_BASE: &str = "192.168";
 
     let network_interfaces = match NetworkInterface::show() {
         Ok(interfaces) => interfaces,
@@ -186,7 +186,7 @@ pub fn generate_interface_subnet_and_name(ip_suffix: u8) -> std::io::Result<Subn
 
         //10.8.X.X and 10.66.X.X is used in openvpn
         //selected 10.94.X.X for our vpn
-        let number = rng.gen_range(0..255);
+        let number = rng.gen_range(8..9);
 
 
         let device_name = format!("{VPN_INTERFACE_NAME_BASE}_{number}");
