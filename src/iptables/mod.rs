@@ -5,6 +5,7 @@ use network_interface::{NetworkInterface, NetworkInterfaceConfig};
 use rand::Rng;
 use serde::Serialize;
 
+#[derive(Debug, Clone, Serialize)]
 pub struct IpTablesRule {
     table: String,
     rule: String,
@@ -190,7 +191,7 @@ pub fn generate_interface_subnet_and_name(ip_suffix: u8) -> std::io::Result<Subn
 
 
         let device_name = format!("{VPN_INTERFACE_NAME_BASE}_{number}");
-        if let Some(ni) = network_interfaces.iter().find(|ni| ni.name == device_name) {
+        if let Some(_ni) = network_interfaces.iter().find(|ni| ni.name == device_name) {
             continue;
         }
         let subnet_part = format!(

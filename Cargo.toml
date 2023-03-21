@@ -13,8 +13,8 @@ readme = "README.md"
 #ya-runtime-sdk = { version = "0.4.0", features = ["macros"] }
 ya-runtime-sdk = { git = "https://github.com/golemfactory/ya-runtime-sdk.git", rev = "85a88e5bd76fedd9ff9904952bc256856535e3cb", features = ["macros", "logger"]}
 ya-client = "0.7.1"
-ya-relay-stack = { git = "https://github.com/golemfactory/ya-relay.git", rev = "d14101b" }
-
+ya-relay-stack = { git = "https://github.com/golemfactory/ya-relay.git", rev = "589af1f" }
+pnet = "0.33.0"
 actix-rt = "2.7.0"
 anyhow = "1.0"
 futures = "0.3.26"

@@ -1,24 +1,20 @@
-use anyhow::bail;
-
 use futures::{FutureExt, SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
-use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::net::{Ipv4Addr, SocketAddr};
 use std::process::Stdio;
+use std::rc::Rc;
 use std::str::FromStr;
-use std::sync::Arc;
 use structopt::StructOpt;
 use tokio::net::UdpSocket;
 use url::Url;
-
-use tokio::sync::mpsc;
+use tokio::task::spawn_local;
+use tokio::sync::{mpsc, Mutex};
 use tun::TunPacket;
-use ya_relay_stack::packet::{IpPacket, IpV4Field, PeekPacket, UdpField, UdpPacket};
-use ya_relay_stack::Protocol;
 
 use ya_runtime_sdk::error::Error;
 use ya_runtime_sdk::server::ContainerEndpoint;
 use ya_runtime_sdk::*;
-use crate::iptables::{create_vpn_config, generate_interface_subnet_and_name, iptables_route_to_interface, SubnetIpv4Info};
+use crate::iptables::{create_vpn_config, generate_interface_subnet_and_name, iptables_cleanup, iptables_route_to_interface, IpTablesRule, SubnetIpv4Info};
 use crate::packet_conv::{packet_ether_to_ip_slice, packet_ip_wrap_to_ether};
 
 use crate::routing::RoutingTable;
@@ -41,6 +37,7 @@ pub struct OutboundGatewayRuntime {
     pub vpn: Option<ContainerEndpoint>,
     pub routing: RoutingTable,
     pub vpn_subnet_info: Option<SubnetIpv4Info>,
+    pub rules_to_remove: Rc<Mutex<Vec<IpTablesRule>>>,
 }
 
 
@@ -93,16 +90,22 @@ impl Runtime for OutboundGatewayRuntime {
 
         log::info!("VPN subnet: {vpn_subnet_info:?}");
 
-        let mut tun_config = create_vpn_config(&vpn_subnet_info);
+        let tun_config = create_vpn_config(&vpn_subnet_info);
         let _echo_server = false;
+
+        let ip_rules_to_remove_ext = self.rules_to_remove.clone();
         // TODO: Here we should start listening on the same protocol as ExeUnit.
         async move {
             //let tun =
-            let socket = Arc::new(UdpSocket::bind(socket_addr).await.unwrap());
+            let socket = Rc::new(UdpSocket::bind(socket_addr).await.unwrap());
 
             log::info!("Listening on: {}", socket.local_addr().unwrap());
             let dev = tun::create_as_async(&tun_config).unwrap();
-            iptables_route_to_interface("eth0", &vpn_subnet_info.interface_name).unwrap();
+            let ip_rules_to_remove = iptables_route_to_interface("eth0", &vpn_subnet_info.interface_name).unwrap();
+            {
+                //use this method due to runtime issues
+                *ip_rules_to_remove_ext.lock().await = ip_rules_to_remove;
+            }
 
             let (mut tun_write, mut tun_read) = dev.into_framed().split();
             //let r = Arc::new(socket);
@@ -112,7 +115,7 @@ impl Runtime for OutboundGatewayRuntime {
 
             let yagna_subnet = Ipv4Addr::from_str("192.168.8.0").unwrap();
             let socket_ = socket.clone();
-            tokio::spawn(async move {
+            spawn_local(async move {
                 let addr = rx_get_addr.recv().await.unwrap();
                 while let Some(bytes) = rx_forward_to_socket.recv().await {
                     log::info!("Sending {:?} bytes to {:?}", bytes, addr);
@@ -121,7 +124,7 @@ impl Runtime for OutboundGatewayRuntime {
             });
             let _socket_ = socket.clone();
             let udp_socket_write = udp_socket_write_.clone();
-            tokio::spawn(async move {
+            spawn_local(async move {
                 loop {
                     if let Some(Ok(packet)) = tun_read.next().await {
                         //todo: add mac addresses
@@ -146,7 +149,7 @@ impl Runtime for OutboundGatewayRuntime {
             });
             let _udp_socket_write = udp_socket_write_;
 
-            tokio::spawn(async move {
+            spawn_local(async move {
                 let mut buf_box = Box::new([0; 70000]); //sufficient to hold max UDP packet
                 let buf = &mut *buf_box;
                 let mut is_addr_sent = false;
@@ -258,7 +261,15 @@ impl Runtime for OutboundGatewayRuntime {
     fn stop<'a>(&mut self, _: &mut Context<Self>) -> EmptyResponse<'a> {
         // Gracefully shutdown the service
         log::info!("Running `Stop` command");
-        async move { Ok(()) }.boxed_local()
+        let ip_rules_to_remove_ext = self.rules_to_remove.clone();
+        async move {
+            // Remove IP rules
+            let ip_rules_to_remove = {
+                ip_rules_to_remove_ext.lock().await.clone()
+            };
+            iptables_cleanup(ip_rules_to_remove)?;
+            Ok(())
+        }.boxed_local()
     }
 
     fn run_command<'a>(
