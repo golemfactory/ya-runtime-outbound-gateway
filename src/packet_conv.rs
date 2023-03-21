@@ -52,6 +52,8 @@ pub fn packet_ip_wrap_to_ether(
                 const ETHER_IP_DST_ADDR: std::ops::Range<usize> = (14+16)..(14+20);
                 translate_address(&mut eth_packet[ETHER_IP_SRC_ADDR], src_subnet, dst_subnet);
                 translate_address(&mut eth_packet[ETHER_IP_DST_ADDR], src_subnet, dst_subnet);
+                const ETHER_IP_CHECKSUM: std::ops::Range<usize> = (14+10)..(14+12);
+                eth_packet[ETHER_IP_CHECKSUM].copy_from_slice(&[0, 0]);
             }
         }
         IpPacket::V6(_pkt) => {
@@ -82,6 +84,7 @@ pub fn packet_ether_to_ip_slice<'a, 'b>(eth_packet: &'a mut[u8], src_subnet: Opt
                 if let (Some(src_subnet), Some(dst_subnet)) = (src_subnet, dst_subnet) {
                     translate_address(&mut ip_frame[IpV4Field::SRC_ADDR], src_subnet, dst_subnet);
                     translate_address(&mut ip_frame[IpV4Field::DST_ADDR], src_subnet, dst_subnet);
+                    ip_frame[10..12].copy_from_slice(&[0, 0]);
                 }
             }
             IpPacket::V6(_pkt) => {
