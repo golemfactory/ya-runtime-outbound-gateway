@@ -186,7 +186,7 @@ pub fn generate_interface_subnet_and_name(ip_suffix: u8) -> std::io::Result<Subn
 
         //10.8.X.X and 10.66.X.X is used in openvpn
         //selected 10.94.X.X for our vpn
-        let number = rng.gen_range(8..9);
+        let number = rng.gen_range(9..10);
 
 
         let device_name = format!("{VPN_INTERFACE_NAME_BASE}_{number}");
