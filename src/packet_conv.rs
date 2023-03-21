@@ -1,19 +1,58 @@
+use pnet::util::ipv4_checksum;
 use ya_relay_stack::packet::{EtherField, IpPacket, IpV4Field, IpV4Packet, PeekPacket};
 use ya_relay_stack::Error;
 
 
 //todo implement proper subnet translation, not only 255.255.255.0
-//returns true if translation was performed
-fn translate_address(addr: &mut[u8], src_subnet: &[u8; 4], dst_subnet: &[u8; 4]) -> bool {
-    let before_translation = u32::from_be_bytes([addr[0], addr[1], addr[2], addr[3]]);
+//returns sum for fixup of checksum
+fn translate_address(addr: &mut[u8], src_subnet: &[u8; 4], dst_subnet: &[u8; 4]) -> u32 {
+    let before_translation_1 = u32::from_be_bytes([0, 0, addr[0], addr[1]]);
+    let before_translation_2 = u32::from_be_bytes([0, 0, addr[2], addr[3]]);
     if addr[0] == src_subnet[0] && addr[1] == src_subnet[1] && addr[2] == src_subnet[2] {
         addr[0] = dst_subnet[0];
         addr[1] = dst_subnet[1];
         addr[2] = dst_subnet[2];
     }
-    let after_translation = u32::from_be_bytes([addr[0], addr[1], addr[2], addr[3]]);
+    let after_translation_1 = u32::from_be_bytes([0, 0, addr[0], addr[1]]);
+    let after_translation_2 = u32::from_be_bytes([0, 0, addr[2], addr[3]]);
     //returns true if translation was done
-    before_translation != after_translation
+    !before_translation_1 + !before_translation_2 + after_translation_1 + after_translation_2
+}
+
+pub fn translate_packet(packet: IpV4Packet, packet_bytes: &mut[u8], src_subnet: &[u8; 4], dst_subnet: &[u8; 4]) -> Result<(), Error> {
+    let mut fixup_sum = 0_u32;
+    fixup_sum += translate_address(&mut packet_bytes[IpV4Field::SRC_ADDR], src_subnet, dst_subnet);
+    fixup_sum += translate_address(&mut packet_bytes[IpV4Field::DST_ADDR], src_subnet, dst_subnet);
+
+    let new_checksum = fix_packet_checksum(&mut packet_bytes[IpV4Field::CHECKSUM], fixup_sum);
+    match packet.protocol {
+        0x01 => {
+            //icmp protocol
+        }
+        0x06 => {
+            let tcp_bytes = &mut packet_bytes[packet.payload_off..];
+            //tcp protocol checksum
+            if tcp_bytes.len() < 20 {
+                return Err(Error::Other(
+                    "Error when wrapping IP packet: TCP packet too short".into(),
+                ));
+            }
+            fix_packet_checksum(&mut tcp_bytes[16..18], fixup_sum);
+            //https://blogs.igalia.com/dpino/2018/06/14/fast-checksum-computation/
+        }
+        0x11 => {
+            //udp protocol
+            let udp_bytes = &mut packet_bytes[packet.payload_off..];
+            if udp_bytes.len() < 8 {
+                return Err(Error::Other(
+                    "Error when wrapping IP packet: UDP packet too short".into(),
+                ));
+            }
+            fix_packet_checksum(&mut udp_bytes[6..8], fixup_sum);
+        }
+        _ => {}
+    }
+    return Ok(());
 }
 
 
@@ -50,18 +89,11 @@ pub fn packet_ip_wrap_to_ether(
     }
     eth_packet[EtherField::PAYLOAD].copy_from_slice(&frame[0..]);
     match IpPacket::packet(frame) {
-        IpPacket::V4(_pkt) => {
+        IpPacket::V4(pkt) => {
             const ETHER_TYPE_IPV4: &[u8; 2] = &[0x08, 0x00];
             eth_packet[EtherField::ETHER_TYPE].copy_from_slice(ETHER_TYPE_IPV4);
             if let (Some(src_subnet), Some(dst_subnet)) = (src_subnet, dst_subnet) {
-                const ETHER_IP_SRC_ADDR: std::ops::Range<usize> = (14+12)..(14+16);
-                const ETHER_IP_DST_ADDR: std::ops::Range<usize> = (14+16)..(14+20);
-                let mut translated = false;
-                translated |= translate_address(&mut eth_packet[ETHER_IP_SRC_ADDR], src_subnet, dst_subnet);
-                translated |= translate_address(&mut eth_packet[ETHER_IP_DST_ADDR], src_subnet, dst_subnet);
-                if translated {
-                    compute_ipv4_checksum_in_place(&mut eth_packet[14..]);
-                }
+                translate_packet(pkt, &mut eth_packet[14..], src_subnet, dst_subnet)?;
             }
         }
         IpPacket::V6(_pkt) => {
@@ -70,6 +102,17 @@ pub fn packet_ip_wrap_to_ether(
         }
     };
     Ok(eth_packet)
+}
+
+pub fn fix_packet_checksum(checksum_bytes: &mut[u8], modify_sum: u32) {
+    //https://www.rfc-editor.org/rfc/rfc1624
+    //HC' = ~(~HC + ~m + m')
+    let old_checksum = u16::from_be_bytes([checksum_bytes[0], checksum_bytes[1]]);
+    let mut sum_f = (!old_checksum as u32) + modify_sum;
+    while sum_f >> 16 != 0 {
+        sum_f = (sum_f >> 16) + (sum_f & 0xffff);
+    }
+    checksum_bytes[0..2].copy_from_slice(&(!sum_f as u16).to_be_bytes());
 }
 
 pub fn compute_ipv4_checksum_in_place(bytes: &mut [u8]) {
@@ -113,15 +156,11 @@ pub fn packet_ether_to_ip_slice<'a, 'b>(eth_packet: &'a mut[u8], src_subnet: Opt
             "Error when creating IP packet from ether packet {err}"
         )));
     } else {
+        
         match IpPacket::packet(ip_frame) {
-            IpPacket::V4(_pkt) => {
+            IpPacket::V4(pkt) => {
                 if let (Some(src_subnet), Some(dst_subnet)) = (src_subnet, dst_subnet) {
-                    let mut translated = false;
-                    translated |= translate_address(&mut ip_frame[IpV4Field::SRC_ADDR], src_subnet, dst_subnet);
-                    translated |= translate_address(&mut ip_frame[IpV4Field::DST_ADDR], src_subnet, dst_subnet);
-                    if translated {
-                        compute_ipv4_checksum_in_place(ip_frame);
-                    }
+                    translate_packet(pkt, ip_frame, src_subnet, dst_subnet)?;
                 }
             }
             IpPacket::V6(_pkt) => {
