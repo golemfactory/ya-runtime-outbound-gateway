@@ -87,112 +87,13 @@ impl Runtime for OutboundGatewayRuntime {
             }
         };
 
-        log::info!("VPN endpoint: {endpoint}");
-        let socket_addr = SocketAddr::from(([127, 0, 0, 1], 52001));
-        let new_endpoint = ContainerEndpoint::UdpDatagram(socket_addr);
-        self.vpn = Some(new_endpoint.clone());
 
-        let vpn_subnet_info = generate_interface_subnet_and_name(7).unwrap();
-        self.vpn_subnet_info = Some(vpn_subnet_info.clone());
-
-        log::info!("VPN subnet: {vpn_subnet_info:?}");
-
-        let tun_config = create_vpn_config(&vpn_subnet_info);
-        let _echo_server = false;
-
-        let ip_rules_to_remove_ext = self.rules_to_remove.clone();
-        let yagna_subnet = Ipv4Addr::from_str("192.168.8.0").unwrap();
-        // TODO: Here we should start listening on the same protocol as ExeUnit.
         async move {
-            //let tun =
-            let socket = Rc::new(UdpSocket::bind(socket_addr).await.unwrap());
 
-            log::info!("Listening on: {}", socket.local_addr().unwrap());
-            let dev = tun::create_as_async(&tun_config).unwrap();
-            let ip_rules_to_remove =
-                iptables_route_to_interface("eth0", &vpn_subnet_info.interface_name).unwrap();
-            {
-                //use this method due to runtime issues
-                *ip_rules_to_remove_ext.lock().await = ip_rules_to_remove;
-            }
-
-            let (mut tun_write, mut tun_read) = dev.into_framed().split();
-            //let r = Arc::new(socket);
-            //let s = r.clone();
-            let (udp_socket_write_, mut rx_forward_to_socket) = mpsc::channel::<Vec<u8>>(1);
-            let (set_addr, mut rx_get_addr) = mpsc::channel::<SocketAddr>(1);
-
-            let socket_ = socket.clone();
-            spawn_local(async move {
-                let addr = rx_get_addr.recv().await.unwrap();
-                while let Some(bytes) = rx_forward_to_socket.recv().await {
-                    log::trace!("Sending {:?} bytes to {:?}", bytes, addr);
-                    let _len = socket_.send_to(&bytes, &addr).await.unwrap();
-                }
-            });
-            let _socket_ = socket.clone();
-            let udp_socket_write = udp_socket_write_.clone();
-            spawn_local(async move {
-                loop {
-                    if let Some(Ok(packet)) = tun_read.next().await {
-                        //todo: add mac addresses
-                        match packet_ip_wrap_to_ether(
-                            &packet.get_bytes(),
-                            None,
-                            None,
-                            Some(&vpn_subnet_info.subnet.octets()),
-                            Some(&yagna_subnet.octets()),
-                        ) {
-                            Ok(ether_packet) => {
-                                if let Err(err) = udp_socket_write.send(ether_packet).await {
-                                    log::error!("Error sending packet: {:?}", err);
-                                }
-                            }
-                            Err(e) => {
-                                log::error!("Error wrapping packet: {:?}", e);
-                            }
-                        }
-                    }
-                }
-            });
-            let _udp_socket_write = udp_socket_write_;
-
-            spawn_local(async move {
-                let mut buf_box = Box::new([0; 70000]); //sufficient to hold max UDP packet
-                let buf = &mut *buf_box;
-                let mut is_addr_sent = false;
-                loop {
-                    let (len, addr) = socket.recv_from(buf).await.unwrap();
-                    log::trace!("{len:?} bytes received from {addr:?}");
-                    log::trace!("Packet content {:?}", &buf[..len]);
-                    if !is_addr_sent {
-                        set_addr.send(addr).await.unwrap();
-                        is_addr_sent = true;
-                    }
-                    match packet_ether_to_ip_slice(
-                        &mut buf[..len],
-                        Some(&yagna_subnet.octets()),
-                        Some(&vpn_subnet_info.subnet.octets()),
-                    ) {
-                        Ok(ip_slice) => {
-                            log::trace!("IP packet: {:?}", ip_slice);
-                            if let Err(err) =
-                                tun_write.send(TunPacket::new(ip_slice.to_vec())).await
-                            {
-                                log::error!("Error sending packet: {:?}", err);
-                            }
-                        }
-                        Err(e) => {
-                            log::error!("Error unwrapping packet: {:?}", e);
-                        }
-                    }
-                }
-            });
 
             //endpoint.connect(cep).await?;
             Ok(Some(serde_json::json!({
-                "endpoint": new_endpoint,
-                "vpn-subnet-info": vpn_subnet_info,
+
             })))
         }
         .boxed_local()
@@ -294,12 +195,122 @@ impl Runtime for OutboundGatewayRuntime {
         //       Requested and return my endpoint address here.
         let routing = self.routing.clone();
         let endpoint = self.vpn.clone();
+
+
+
+        //log::info!("VPN endpoint: {endpoint}");
+        let socket_addr = SocketAddr::from(([127, 0, 0, 1], 52001));
+        let new_endpoint = ContainerEndpoint::UdpDatagram(socket_addr);
+        self.vpn = Some(new_endpoint.clone());
+
+        let vpn_subnet_info = generate_interface_subnet_and_name(7).unwrap();
+        self.vpn_subnet_info = Some(vpn_subnet_info.clone());
+
+        log::info!("VPN subnet: {vpn_subnet_info:?}");
+
+        let tun_config = create_vpn_config(&vpn_subnet_info);
+        let _echo_server = false;
+
+        let ip_rules_to_remove_ext = self.rules_to_remove.clone();
+        let yagna_subnet = Ipv4Addr::from_str("192.168.8.0").unwrap();
+
+
         async move {
+            //let tun =
+            let socket = Rc::new(UdpSocket::bind(socket_addr).await.unwrap());
+
+            log::info!("Listening on: {}", socket.local_addr().unwrap());
+            let dev = tun::create_as_async(&tun_config).unwrap();
+            let ip_rules_to_remove =
+                iptables_route_to_interface("eth0", &vpn_subnet_info.interface_name).unwrap();
+            {
+                //use this method due to runtime issues
+                *ip_rules_to_remove_ext.lock().await = ip_rules_to_remove;
+            }
+
+            let (mut tun_write, mut tun_read) = dev.into_framed().split();
+            //let r = Arc::new(socket);
+            //let s = r.clone();
+            let (udp_socket_write_, mut rx_forward_to_socket) = mpsc::channel::<Vec<u8>>(1);
+            let (set_addr, mut rx_get_addr) = mpsc::channel::<SocketAddr>(1);
+
+            let socket_ = socket.clone();
+            spawn_local(async move {
+                let addr = rx_get_addr.recv().await.unwrap();
+                while let Some(bytes) = rx_forward_to_socket.recv().await {
+                    log::trace!("Sending {:?} bytes to {:?}", bytes, addr);
+                    let _len = socket_.send_to(&bytes, &addr).await.unwrap();
+                }
+            });
+            let _socket_ = socket.clone();
+            let udp_socket_write = udp_socket_write_.clone();
+            spawn_local(async move {
+                loop {
+                    if let Some(Ok(packet)) = tun_read.next().await {
+                        //todo: add mac addresses
+                        match packet_ip_wrap_to_ether(
+                            &packet.get_bytes(),
+                            None,
+                            None,
+                            Some(&vpn_subnet_info.subnet.octets()),
+                            Some(&yagna_subnet.octets()),
+                        ) {
+                            Ok(ether_packet) => {
+                                if let Err(err) = udp_socket_write.send(ether_packet).await {
+                                    log::error!("Error sending packet: {:?}", err);
+                                }
+                            }
+                            Err(e) => {
+                                log::error!("Error wrapping packet: {:?}", e);
+                            }
+                        }
+                    }
+                }
+            });
+            let _udp_socket_write = udp_socket_write_;
+
+            spawn_local(async move {
+                let mut buf_box = Box::new([0; 70000]); //sufficient to hold max UDP packet
+                let buf = &mut *buf_box;
+                let mut is_addr_sent = false;
+                loop {
+                    let (len, addr) = socket.recv_from(buf).await.unwrap();
+                    log::trace!("{len:?} bytes received from {addr:?}");
+                    log::trace!("Packet content {:?}", &buf[..len]);
+                    if !is_addr_sent {
+                        set_addr.send(addr).await.unwrap();
+                        is_addr_sent = true;
+                    }
+                    match packet_ether_to_ip_slice(
+                        &mut buf[..len],
+                        Some(&yagna_subnet.octets()),
+                        Some(&vpn_subnet_info.subnet.octets()),
+                    ) {
+                        Ok(ip_slice) => {
+                            log::trace!("IP packet: {:?}", ip_slice);
+                            if let Err(err) =
+                                tun_write.send(TunPacket::new(ip_slice.to_vec())).await
+                            {
+                                log::error!("Error sending packet: {:?}", err);
+                            }
+                        }
+                        Err(e) => {
+                            log::error!("Error unwrapping packet: {:?}", e);
+                        }
+                    }
+                }
+            });
             routing.update_network(network).await?;
             endpoint.ok_or_else(|| {
                 Error::from_string("VPN ExeUnit - Runtime communication endpoint not set")
             })
+
+            //endpoint.connect(cep).await?;
+            /*Ok(Some(serde_json::json!({
+                "endpoint": new_endpoint,
+                "vpn-subnet-info": vpn_subnet_info,
+            })))*/
         }
-        .boxed_local()
+            .boxed_local()
     }
 }
