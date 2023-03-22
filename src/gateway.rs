@@ -190,11 +190,6 @@ impl Runtime for OutboundGatewayRuntime {
                 Err(err) => return Error::response(format!("Error when parsing network addr {err:?}")),
             };
         }
-        // TODO: I'm returning here the same endpoint, that I got from ExeUnit.
-        //       In reality I should start listening on the same protocol as ExeUnit
-        //       Requested and return my endpoint address here.
-        let routing = self.routing.clone();
-        let endpoint = self.vpn.clone();
 
 
 
@@ -213,6 +208,12 @@ impl Runtime for OutboundGatewayRuntime {
 
         let ip_rules_to_remove_ext = self.rules_to_remove.clone();
         let yagna_subnet = Ipv4Addr::from_str("192.168.8.0").unwrap();
+
+        // TODO: I'm returning here the same endpoint, that I got from ExeUnit.
+        //       In reality I should start listening on the same protocol as ExeUnit
+        //       Requested and return my endpoint address here.
+        let routing = self.routing.clone();
+        let endpoint = self.vpn.clone();
 
 
         async move {
