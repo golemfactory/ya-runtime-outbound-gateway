@@ -1,7 +1,7 @@
 mod gateway;
-mod routing;
 mod iptables;
 mod packet_conv;
+mod routing;
 
 use gateway::OutboundGatewayRuntime;
 

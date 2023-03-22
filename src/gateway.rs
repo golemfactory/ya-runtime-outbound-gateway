@@ -6,16 +6,19 @@ use std::rc::Rc;
 use std::str::FromStr;
 use structopt::StructOpt;
 use tokio::net::UdpSocket;
-use url::Url;
-use tokio::task::spawn_local;
 use tokio::sync::{mpsc, Mutex};
+use tokio::task::spawn_local;
 use tun::TunPacket;
+use url::Url;
 
+use crate::iptables::{
+    create_vpn_config, generate_interface_subnet_and_name, iptables_cleanup,
+    iptables_route_to_interface, IpTablesRule, SubnetIpv4Info,
+};
+use crate::packet_conv::{packet_ether_to_ip_slice, packet_ip_wrap_to_ether};
 use ya_runtime_sdk::error::Error;
 use ya_runtime_sdk::server::ContainerEndpoint;
 use ya_runtime_sdk::*;
-use crate::iptables::{create_vpn_config, generate_interface_subnet_and_name, iptables_cleanup, iptables_route_to_interface, IpTablesRule, SubnetIpv4Info};
-use crate::packet_conv::{packet_ether_to_ip_slice, packet_ip_wrap_to_ether};
 
 use crate::routing::RoutingTable;
 
@@ -39,7 +42,6 @@ pub struct OutboundGatewayRuntime {
     pub vpn_subnet_info: Option<SubnetIpv4Info>,
     pub rules_to_remove: Rc<Mutex<Vec<IpTablesRule>>>,
 }
-
 
 impl Runtime for OutboundGatewayRuntime {
     fn deploy<'a>(&mut self, _: &mut Context<Self>) -> OutputResponse<'a> {
@@ -101,7 +103,8 @@ impl Runtime for OutboundGatewayRuntime {
 
             log::info!("Listening on: {}", socket.local_addr().unwrap());
             let dev = tun::create_as_async(&tun_config).unwrap();
-            let ip_rules_to_remove = iptables_route_to_interface("eth0", &vpn_subnet_info.interface_name).unwrap();
+            let ip_rules_to_remove =
+                iptables_route_to_interface("eth0", &vpn_subnet_info.interface_name).unwrap();
             {
                 //use this method due to runtime issues
                 *ip_rules_to_remove_ext.lock().await = ip_rules_to_remove;
@@ -132,7 +135,7 @@ impl Runtime for OutboundGatewayRuntime {
                             &packet.get_bytes(),
                             None,
                             None,
-                                Some(&vpn_subnet_info.subnet.octets()),
+                            Some(&vpn_subnet_info.subnet.octets()),
                             Some(&yagna_subnet.octets()),
                         ) {
                             Ok(ether_packet) => {
@@ -161,9 +164,10 @@ impl Runtime for OutboundGatewayRuntime {
                         set_addr.send(addr).await.unwrap();
                         is_addr_sent = true;
                     }
-                    match packet_ether_to_ip_slice(&mut buf[..len],
-                                                   Some(&yagna_subnet.octets()),
-                                                   Some(&vpn_subnet_info.subnet.octets()),
+                    match packet_ether_to_ip_slice(
+                        &mut buf[..len],
+                        Some(&yagna_subnet.octets()),
+                        Some(&vpn_subnet_info.subnet.octets()),
                     ) {
                         Ok(ip_slice) => {
                             log::info!("IP packet: {:?}", ip_slice);
@@ -264,12 +268,11 @@ impl Runtime for OutboundGatewayRuntime {
         let ip_rules_to_remove_ext = self.rules_to_remove.clone();
         async move {
             // Remove IP rules
-            let ip_rules_to_remove = {
-                ip_rules_to_remove_ext.lock().await.clone()
-            };
+            let ip_rules_to_remove = { ip_rules_to_remove_ext.lock().await.clone() };
             iptables_cleanup(ip_rules_to_remove)?;
             Ok(())
-        }.boxed_local()
+        }
+        .boxed_local()
     }
 
     fn run_command<'a>(
