@@ -88,15 +88,9 @@ impl Runtime for OutboundGatewayRuntime {
         };
 
         log::info!("VPN endpoint: {endpoint}");
-        let socket_addr = match endpoint {
-            ContainerEndpoint::UdpDatagram(endpoint) => {SocketAddr::from((endpoint.ip(), endpoint.port()))}
-            _ => {
-                return Error::response("Start command expects UDP endpoint")
-            }
-        };
-        // ;
-        //let new_endpoint = ContainerEndpoint::UdpDatagram(socket_addr);
-        self.vpn = Some(endpoint.clone());
+        let socket_addr = SocketAddr::from(([127, 0, 0, 1], 52001));
+        let new_endpoint = ContainerEndpoint::UdpDatagram(socket_addr);
+        self.vpn = Some(new_endpoint.clone());
 
         let vpn_subnet_info = generate_interface_subnet_and_name(7).unwrap();
         self.vpn_subnet_info = Some(vpn_subnet_info.clone());
@@ -197,7 +191,7 @@ impl Runtime for OutboundGatewayRuntime {
 
             //endpoint.connect(cep).await?;
             Ok(Some(serde_json::json!({
-                "endpoint": endpoint,
+                "endpoint": new_endpoint,
                 "vpn-subnet-info": vpn_subnet_info,
             })))
         }
