@@ -4,6 +4,7 @@ use std::net::{Ipv4Addr, SocketAddr};
 use std::process::Stdio;
 use std::rc::Rc;
 use std::str::FromStr;
+use futures::future::err;
 use structopt::StructOpt;
 use tokio::net::UdpSocket;
 use tokio::sync::{mpsc, Mutex};
@@ -20,7 +21,7 @@ use ya_runtime_sdk::error::Error;
 use ya_runtime_sdk::server::ContainerEndpoint;
 use ya_runtime_sdk::*;
 
-use crate::routing::RoutingTable;
+use crate::routing::{Network, RoutingTable};
 
 #[derive(StructOpt)]
 #[structopt(rename_all = "kebab-case")]
@@ -41,6 +42,10 @@ pub struct OutboundGatewayRuntime {
     pub routing: RoutingTable,
     pub vpn_subnet_info: Option<SubnetIpv4Info>,
     pub rules_to_remove: Rc<Mutex<Vec<IpTablesRule>>>,
+
+    pub yagna_net_ip: Option<Ipv4Addr>,
+    pub yagna_net_addr: Option<Ipv4Addr>,
+    pub yagna_net_mask: Option<Ipv4Addr>,
 }
 
 impl Runtime for OutboundGatewayRuntime {
@@ -83,9 +88,15 @@ impl Runtime for OutboundGatewayRuntime {
         };
 
         log::info!("VPN endpoint: {endpoint}");
-        let socket_addr = SocketAddr::from(([127, 0, 0, 1], 52001));
-        let new_endpoint = ContainerEndpoint::UdpDatagram(socket_addr);
-        self.vpn = Some(new_endpoint.clone());
+        let socket_addr = match endpoint {
+            ContainerEndpoint::UdpDatagram(endpoint) => {SocketAddr::from((endpoint.ip(), endpoint.port()))}
+            _ => {
+                return Error::response("Start command expects UDP endpoint")
+            }
+        };
+        // ;
+        //let new_endpoint = ContainerEndpoint::UdpDatagram(socket_addr);
+        self.vpn = Some(endpoint.clone());
 
         let vpn_subnet_info = generate_interface_subnet_and_name(7).unwrap();
         self.vpn_subnet_info = Some(vpn_subnet_info.clone());
@@ -96,6 +107,7 @@ impl Runtime for OutboundGatewayRuntime {
         let _echo_server = false;
 
         let ip_rules_to_remove_ext = self.rules_to_remove.clone();
+        let yagna_subnet = Ipv4Addr::from_str("192.168.8.0").unwrap();
         // TODO: Here we should start listening on the same protocol as ExeUnit.
         async move {
             //let tun =
@@ -116,7 +128,6 @@ impl Runtime for OutboundGatewayRuntime {
             let (udp_socket_write_, mut rx_forward_to_socket) = mpsc::channel::<Vec<u8>>(1);
             let (set_addr, mut rx_get_addr) = mpsc::channel::<SocketAddr>(1);
 
-            let yagna_subnet = Ipv4Addr::from_str("192.168.8.0").unwrap();
             let socket_ = socket.clone();
             spawn_local(async move {
                 let addr = rx_get_addr.recv().await.unwrap();
@@ -186,7 +197,7 @@ impl Runtime for OutboundGatewayRuntime {
 
             //endpoint.connect(cep).await?;
             Ok(Some(serde_json::json!({
-                "endpoint": new_endpoint,
+                "endpoint": endpoint,
                 "vpn-subnet-info": vpn_subnet_info,
             })))
         }
@@ -265,6 +276,25 @@ impl Runtime for OutboundGatewayRuntime {
     ) -> EndpointResponse<'a> {
         log::info!("Running `join_network` with: {network:?}");
 
+        if network.networks.len() != 1 {
+            return Error::response("Only one network is supported");
+        }
+        {
+            let network = network.networks.iter().next().unwrap();
+            //network.if_addr;
+            self.yagna_net_ip = match Ipv4Addr::from_str(network.if_addr.as_str()) {
+                Ok(ip) => Some(ip),
+                Err(err) => return Error::response(format!("Error when parsing network ipaddr {err:?}")),
+            };
+            self.yagna_net_mask = match Ipv4Addr::from_str(network.mask.as_str()) {
+                Ok(mask) => Some(mask),
+                Err(err) => return Error::response(format!("Error when parsing network mask {err:?}")),
+            };
+            self.yagna_net_addr = match Ipv4Addr::from_str(network.addr.as_str()) {
+                Ok(addr) => Some(addr),
+                Err(err) => return Error::response(format!("Error when parsing network addr {err:?}")),
+            };
+        }
         // TODO: I'm returning here the same endpoint, that I got from ExeUnit.
         //       In reality I should start listening on the same protocol as ExeUnit
         //       Requested and return my endpoint address here.
