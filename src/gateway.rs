@@ -44,8 +44,8 @@ pub struct OutboundGatewayRuntime {
 }
 
 impl Runtime for OutboundGatewayRuntime {
-    fn deploy<'a>(&mut self, _: &mut Context<Self>) -> OutputResponse<'a> {
-        log::info!("Running `Deploy` command");
+    fn deploy<'a>(&mut self, ctx: &mut Context<Self>) -> OutputResponse<'a> {
+        log::info!("Running `Deploy` command. Vpn endpoint: {:?}", ctx.cli.runtime.vpn_endpoint);
 
         // SDK will auto-generate the following code:
         //
@@ -121,7 +121,7 @@ impl Runtime for OutboundGatewayRuntime {
             spawn_local(async move {
                 let addr = rx_get_addr.recv().await.unwrap();
                 while let Some(bytes) = rx_forward_to_socket.recv().await {
-                    log::info!("Sending {:?} bytes to {:?}", bytes, addr);
+                    log::trace!("Sending {:?} bytes to {:?}", bytes, addr);
                     let _len = socket_.send_to(&bytes, &addr).await.unwrap();
                 }
             });
@@ -158,8 +158,8 @@ impl Runtime for OutboundGatewayRuntime {
                 let mut is_addr_sent = false;
                 loop {
                     let (len, addr) = socket.recv_from(buf).await.unwrap();
-                    log::info!("{len:?} bytes received from {addr:?}");
-                    log::info!("Packet content {:?}", &buf[..len]);
+                    log::trace!("{len:?} bytes received from {addr:?}");
+                    log::trace!("Packet content {:?}", &buf[..len]);
                     if !is_addr_sent {
                         set_addr.send(addr).await.unwrap();
                         is_addr_sent = true;
@@ -170,7 +170,7 @@ impl Runtime for OutboundGatewayRuntime {
                         Some(&vpn_subnet_info.subnet.octets()),
                     ) {
                         Ok(ip_slice) => {
-                            log::info!("IP packet: {:?}", ip_slice);
+                            log::trace!("IP packet: {:?}", ip_slice);
                             if let Err(err) =
                                 tun_write.send(TunPacket::new(ip_slice.to_vec())).await
                             {
@@ -181,75 +181,6 @@ impl Runtime for OutboundGatewayRuntime {
                             log::error!("Error unwrapping packet: {:?}", e);
                         }
                     }
-
-                    /*
-                    let value = match PacketHeaders::from_ethernet_slice(&buf[..len]) {
-                        Err(value) => {
-                            log::warn!("Failed to parse/read packet {:?}", value);
-                            continue;
-                        }
-                        Ok(value) => value,
-                    };
-
-                    log::info!("link: {:?}", value.link);
-                    log::info!("vlan: {:?}", value.vlan);
-                    log::info!("ip: {:?}", value.ip);
-                    log::info!("transport: {:?}", value.transport);
-                    let link = if let Some(link) = value.link {
-                        link
-                    } else {
-                        log::warn!("No ethernet header found {:?}", value);
-                        continue;
-                    };
-
-                    let ether_type = EtherType::from_u16(link.ether_type);
-                    match ether_type {
-                        Some(EtherType::Ipv4 | EtherType::Ipv6) => {
-
-                        }
-                        Some(EtherType::Arp) => {
-                            let slice = arp_parse::parse(value.payload).unwrap();
-                            let op_code = slice.op_code();
-                            if op_code == arp_parse::OPCODE_REQUEST {
-                                let target_ip_addr = Ipv4Addr::new(
-                                    slice.target_protocol_addr()[0],
-                                    slice.target_protocol_addr()[1],
-                                    slice.target_protocol_addr()[2],
-                                    slice.target_protocol_addr()[3],
-                                );
-                                log::info!("ARP request for IP {}", target_ip_addr);
-
-                                let mut buf_resp = [0u8; 14 + arp_parse::ARP_SIZE as usize];
-                                let yagna_mac = [0u8; arp_parse::HARDWARE_SIZE_ETHERNET as usize];
-                                let _arp_response_builder =
-                                    ARPSliceBuilder::new(&mut buf_resp[14..])
-                                        .unwrap()
-                                        .op_code(arp_parse::OPCODE_REPLY)
-                                        .unwrap()
-                                        .sender_hardware_addr(&yagna_mac)
-                                        .unwrap()
-                                        .sender_protocol_addr(slice.target_protocol_addr())
-                                        .unwrap()
-                                        .target_protocol_addr(slice.sender_protocol_addr())
-                                        .unwrap()
-                                        .target_hardware_addr(slice.sender_hardware_addr())
-                                        .unwrap();
-
-                                buf_resp[0..6].copy_from_slice(&link.destination);
-                                buf_resp[6..12].copy_from_slice(&link.source);
-                                buf_resp[12..14]
-                                    .copy_from_slice(&(EtherType::Arp as u16).to_be_bytes());
-
-                                log::info!("Sending ARP response to {} {:?}", addr, buf_resp);
-
-                                let _len = udp_socket_write.send(buf_resp.to_vec()).await.unwrap();
-                            }
-                        }
-                        Some(_) => log::info!("Unknown link type {:?}", ether_type),
-                        None => log::info!("Unknown link type"),
-
-
-                    };*/
                 }
             });
 
@@ -269,6 +200,7 @@ impl Runtime for OutboundGatewayRuntime {
         async move {
             // Remove IP rules
             let ip_rules_to_remove = { ip_rules_to_remove_ext.lock().await.clone() };
+            log::info!("Cleaning iptables rules: {ip_rules_to_remove:?}");
             iptables_cleanup(ip_rules_to_remove)?;
             Ok(())
         }
