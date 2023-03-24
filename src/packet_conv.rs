@@ -135,7 +135,6 @@ pub fn fix_packet_checksum(checksum_bytes: &mut [u8], modify_sum: u32) {
     checksum_bytes[0..2].copy_from_slice(&(!sum_f as u16).to_be_bytes());
 }
 
-
 pub fn packet_ether_to_ip_slice<'a, 'b>(
     eth_packet: &'a mut [u8],
     src_subnet: Option<&'b [u8; 4]>,
@@ -186,9 +185,9 @@ mod tests {
         let packet_len = IpV4Packet::read_header_len(bytes);
         if bytes.len() < packet_len {
             log::warn!(
-            "Error when computing IPv4 checksum: Packet too short. Packet length {}",
-            bytes.len()
-        );
+                "Error when computing IPv4 checksum: Packet too short. Packet length {}",
+                bytes.len()
+            );
             return;
         }
 
@@ -208,7 +207,6 @@ mod tests {
         let sum_f = (sum_f ^ 0xffff) as u16;
         bytes[IpV4Field::CHECKSUM].copy_from_slice(&u16::to_be_bytes(sum_f));
     }
-
 
     #[test]
     fn test_packet_ether_to_ip() {

@@ -4,7 +4,6 @@ use std::net::{Ipv4Addr, SocketAddr};
 use std::process::Stdio;
 use std::rc::Rc;
 use std::str::FromStr;
-use futures::future::err;
 use structopt::StructOpt;
 use tokio::net::UdpSocket;
 use tokio::sync::{mpsc, Mutex};
@@ -21,7 +20,7 @@ use ya_runtime_sdk::error::Error;
 use ya_runtime_sdk::server::ContainerEndpoint;
 use ya_runtime_sdk::*;
 
-use crate::routing::{Network, RoutingTable};
+use crate::routing::RoutingTable;
 
 #[derive(StructOpt)]
 #[structopt(rename_all = "kebab-case")]
@@ -29,6 +28,9 @@ pub struct GatewayCli {
     /// VPN endpoint address
     #[structopt(long)]
     vpn_endpoint: Option<Url>,
+
+    #[structopt(long)]
+    apply_iptables_rules: Option<bool>,
 }
 
 #[derive(Default, Deserialize, Serialize)]
@@ -50,7 +52,10 @@ pub struct OutboundGatewayRuntime {
 
 impl Runtime for OutboundGatewayRuntime {
     fn deploy<'a>(&mut self, ctx: &mut Context<Self>) -> OutputResponse<'a> {
-        log::info!("Running `Deploy` command. Vpn endpoint: {:?}", ctx.cli.runtime.vpn_endpoint);
+        log::info!(
+            "Running `Deploy` command. Vpn endpoint: {:?}",
+            ctx.cli.runtime.vpn_endpoint
+        );
 
         // SDK will auto-generate the following code:
         //
@@ -79,7 +84,7 @@ impl Runtime for OutboundGatewayRuntime {
         log::debug!("VPN endpoint: {:?}", ctx.cli.runtime.vpn_endpoint);
 
         let endpoint = ctx.cli.runtime.vpn_endpoint.clone();
-        let endpoint = match endpoint.map(ContainerEndpoint::try_from) {
+        let _endpoint = match endpoint.map(ContainerEndpoint::try_from) {
             Some(Ok(endpoint)) => endpoint,
             Some(Err(e)) => return Error::response(format!("Failed to parse VPN endpoint: {e}")),
             None => {
@@ -87,14 +92,9 @@ impl Runtime for OutboundGatewayRuntime {
             }
         };
 
-
         async move {
-
-
             //endpoint.connect(cep).await?;
-            Ok(Some(serde_json::json!({
-
-            })))
+            Ok(Some(serde_json::json!({})))
         }
         .boxed_local()
     }
@@ -167,10 +167,9 @@ impl Runtime for OutboundGatewayRuntime {
     fn join_network<'a>(
         &mut self,
         network: CreateNetwork,
-        _ctx: &mut Context<Self>,
+        ctx: &mut Context<Self>,
     ) -> EndpointResponse<'a> {
         log::info!("Running `join_network` with: {network:?}");
-
         if network.networks.len() != 1 {
             return Error::response("Only one network is supported");
         }
@@ -179,19 +178,23 @@ impl Runtime for OutboundGatewayRuntime {
             //network.if_addr;
             self.yagna_net_ip = match Ipv4Addr::from_str(network.if_addr.as_str()) {
                 Ok(ip) => Some(ip),
-                Err(err) => return Error::response(format!("Error when parsing network ipaddr {err:?}")),
+                Err(err) => {
+                    return Error::response(format!("Error when parsing network ipaddr {err:?}"))
+                }
             };
             self.yagna_net_mask = match Ipv4Addr::from_str(network.mask.as_str()) {
                 Ok(mask) => Some(mask),
-                Err(err) => return Error::response(format!("Error when parsing network mask {err:?}")),
+                Err(err) => {
+                    return Error::response(format!("Error when parsing network mask {err:?}"))
+                }
             };
             self.yagna_net_addr = match Ipv4Addr::from_str(network.addr.as_str()) {
                 Ok(addr) => Some(addr),
-                Err(err) => return Error::response(format!("Error when parsing network addr {err:?}")),
+                Err(err) => {
+                    return Error::response(format!("Error when parsing network addr {err:?}"))
+                }
             };
         }
-
-
 
         //log::info!("VPN endpoint: {endpoint}");
         let socket_addr = SocketAddr::from(([127, 0, 0, 1], 52001));
@@ -215,7 +218,7 @@ impl Runtime for OutboundGatewayRuntime {
         let routing = self.routing.clone();
         let endpoint = self.vpn.clone();
 
-
+        let apply_ip_tables_rules = ctx.cli.runtime.apply_iptables_rules.unwrap_or_default();
         async move {
             //let tun =
             let socket = Rc::new(UdpSocket::bind(socket_addr).await.unwrap());
@@ -223,11 +226,15 @@ impl Runtime for OutboundGatewayRuntime {
             log::info!("Listening on: {}", socket.local_addr().unwrap());
             let dev = tun::create_as_async(&tun_config).unwrap();
 
-            let ip_rules_to_remove =
-                iptables_route_to_interface("eth0", &vpn_subnet_info.interface_name).unwrap();
-            {
-                //use this method due to runtime issues
-                *ip_rules_to_remove_ext.lock().await = ip_rules_to_remove;
+            //Leaving this code inactive for now.
+            //TODO: use when rules will be needed
+            if apply_ip_tables_rules {
+                let ip_rules_to_remove =
+                    iptables_route_to_interface("eth0", &vpn_subnet_info.interface_name).unwrap();
+                {
+                    //use this method due to runtime issues
+                    *ip_rules_to_remove_ext.lock().await = ip_rules_to_remove;
+                }
             }
 
             let (mut tun_write, mut tun_read) = dev.into_framed().split();
@@ -313,6 +320,6 @@ impl Runtime for OutboundGatewayRuntime {
                 "vpn-subnet-info": vpn_subnet_info,
             })))*/
         }
-            .boxed_local()
+        .boxed_local()
     }
 }
