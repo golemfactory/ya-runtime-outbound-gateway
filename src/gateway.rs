@@ -224,7 +224,7 @@ impl Runtime for OutboundGatewayRuntime {
             let dev = tun::create_as_async(&tun_config).unwrap();
 
             let ip_rules_to_remove =
-                iptables_route_to_interface("enX0", &vpn_subnet_info.interface_name).unwrap();
+                iptables_route_to_interface("eth0", &vpn_subnet_info.interface_name).unwrap();
             {
                 //use this method due to runtime issues
                 *ip_rules_to_remove_ext.lock().await = ip_rules_to_remove;

@@ -133,7 +133,7 @@ pub fn iptables_route_to_interface(
     let rules_to_delete_later = vec![
         IpTablesRule {
             table: "filter".to_string(),
-            rule: format!("FORWARD -i {vpn_interface} -o eth0 -j ACCEPT"),
+            rule: format!("FORWARD -i {vpn_interface} -o {main_interface} -j ACCEPT"),
         },
         IpTablesRule {
             table: "filter".to_string(),
