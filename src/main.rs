@@ -3,9 +3,9 @@ mod iptables;
 mod packet_conv;
 mod routing;
 
-use gateway::OutboundGatewayRuntime;
+use gateway::GatewayRuntime;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    ya_runtime_sdk::run::<OutboundGatewayRuntime>().await
+    ya_runtime_sdk::run::<GatewayRuntime>().await
 }

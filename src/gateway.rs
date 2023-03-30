@@ -38,13 +38,13 @@ pub struct GatewayConf {
 #[derive(Default, RuntimeDef, Clone)]
 #[cli(GatewayCli)]
 #[conf(GatewayConf)]
-pub struct OutboundGatewayRuntime {
+pub struct GatewayRuntime {
     pub routing: RoutingTable,
     pub rules_to_remove: Arc<Mutex<Vec<IpTablesRule>>>,
     pub vpn_endpoint: Option<ContainerEndpoint>,
 }
 
-impl Runtime for OutboundGatewayRuntime {
+impl Runtime for GatewayRuntime {
     fn deploy<'a>(&mut self, ctx: &mut Context<Self>) -> OutputResponse<'a> {
         //logs from here are not yet visible in exe unit logs
         log::info!(
@@ -68,7 +68,7 @@ impl Runtime for OutboundGatewayRuntime {
 
     fn start<'a>(&mut self, ctx: &mut Context<Self>) -> OutputResponse<'a> {
         //these logs seems to be visible in proper folder
-        log::info!("Running `Start` command. Vpn endpoint: {:?}. Outbound configuration {:?}", ctx.cli.runtime.vpn_endpoint, ctx.conf);
+        log::info!("Running `Start` command. Vpn endpoint: {:?}. Gateway configuration {:?}", ctx.cli.runtime.vpn_endpoint, ctx.conf);
 
         let _emitter = ctx
             .emitter

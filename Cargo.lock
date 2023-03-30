@@ -2254,7 +2254,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "ya-runtime-outbound-gateway"
+name = "ya-runtime-outbound"
 version = "0.2.0"
 dependencies = [
  "actix-rt",

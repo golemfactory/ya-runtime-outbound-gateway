@@ -1,9 +1,9 @@
 [
   {
-    "name": "outbound-gateway",
-    "version": "0.1.0",
+    "name": "outbound",
+    "version": "0.1.1",
     "supervisor-path": "exe-unit",
-    "runtime-path": "ya-runtime-outbound-gateway/ya-runtime-outbound-gateway",
+    "runtime-path": "ya-runtime-outbound/ya-runtime-outbound",
     "description": "Outbound network traffic gateway",
     "extra-args": ["--runtime-managed-image"],
     "properties": {},

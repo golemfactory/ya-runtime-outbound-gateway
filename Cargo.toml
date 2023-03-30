@@ -1,5 +1,5 @@
 [package]
-name = "ya-runtime-outbound-gateway"
+name = "ya-runtime-outbound"
 version = "0.2.0"
 edition = "2021"
 description = "Runtime for exposing outbound connections for other Nodes in Golem Network"
