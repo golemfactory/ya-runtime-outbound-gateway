@@ -1,19 +1,18 @@
 use futures::{FutureExt, SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
-use std::net::{Ipv4Addr, SocketAddr};
+use std::net::Ipv4Addr;
 use std::process::Stdio;
-use std::rc::Rc;
 use std::str::FromStr;
+use std::sync::Arc;
 use structopt::StructOpt;
 use tokio::net::UdpSocket;
 use tokio::sync::{mpsc, Mutex};
-use tokio::task::spawn_local;
 use tun::TunPacket;
 use url::Url;
 
 use crate::iptables::{
     create_vpn_config, generate_interface_subnet_and_name, iptables_cleanup,
-    iptables_route_to_interface, IpTablesRule, SubnetIpv4Info,
+    iptables_route_to_interface, IpTablesRule,
 };
 use crate::packet_conv::{packet_ether_to_ip_slice, packet_ip_wrap_to_ether};
 use ya_runtime_sdk::error::Error;
@@ -40,14 +39,9 @@ pub struct GatewayConf {}
 #[cli(GatewayCli)]
 #[conf(GatewayConf)]
 pub struct OutboundGatewayRuntime {
-    pub vpn: Option<ContainerEndpoint>,
     pub routing: RoutingTable,
-    pub vpn_subnet_info: Option<SubnetIpv4Info>,
-    pub rules_to_remove: Rc<Mutex<Vec<IpTablesRule>>>,
-
-    pub yagna_net_ip: Option<Ipv4Addr>,
-    pub yagna_net_addr: Option<Ipv4Addr>,
-    pub yagna_net_mask: Option<Ipv4Addr>,
+    pub rules_to_remove: Arc<Mutex<Vec<IpTablesRule>>>,
+    pub vpn_endpoint: Option<ContainerEndpoint>,
 }
 
 impl Runtime for OutboundGatewayRuntime {
@@ -83,9 +77,14 @@ impl Runtime for OutboundGatewayRuntime {
 
         log::debug!("VPN endpoint: {:?}", ctx.cli.runtime.vpn_endpoint);
 
-        let endpoint = ctx.cli.runtime.vpn_endpoint.clone();
-        let _endpoint = match endpoint.map(ContainerEndpoint::try_from) {
-            Some(Ok(endpoint)) => endpoint,
+        self.vpn_endpoint = match ctx
+            .cli
+            .runtime
+            .vpn_endpoint
+            .clone()
+            .map(ContainerEndpoint::try_from)
+        {
+            Some(Ok(endpoint)) => Some(endpoint),
             Some(Err(e)) => return Error::response(format!("Failed to parse VPN endpoint: {e}")),
             None => {
                 return Error::response("Start command expects VPN endpoint, but None was found.")
@@ -166,62 +165,91 @@ impl Runtime for OutboundGatewayRuntime {
     /// Join a VPN network
     fn join_network<'a>(
         &mut self,
-        network: CreateNetwork,
+        create_network: CreateNetwork,
         ctx: &mut Context<Self>,
     ) -> EndpointResponse<'a> {
-        log::info!("Running `join_network` with: {network:?}");
-        if network.networks.len() != 1 {
+        log::info!("Running `join_network` with: {create_network:?}");
+        if create_network.networks.len() != 1 {
+            log::error!("Only one network is supported");
             return Error::response("Only one network is supported");
         }
-        {
-            let network = network.networks.iter().next().unwrap();
-            //network.if_addr;
-            self.yagna_net_ip = match Ipv4Addr::from_str(network.if_addr.as_str()) {
-                Ok(ip) => Some(ip),
-                Err(err) => {
-                    return Error::response(format!("Error when parsing network ipaddr {err:?}"))
-                }
-            };
-            self.yagna_net_mask = match Ipv4Addr::from_str(network.mask.as_str()) {
-                Ok(mask) => Some(mask),
-                Err(err) => {
-                    return Error::response(format!("Error when parsing network mask {err:?}"))
-                }
-            };
-            self.yagna_net_addr = match Ipv4Addr::from_str(network.addr.as_str()) {
-                Ok(addr) => Some(addr),
-                Err(err) => {
-                    return Error::response(format!("Error when parsing network addr {err:?}"))
-                }
-            };
-        }
+        let network = match create_network.networks.iter().next() {
+            Some(network) => network,
+            None => {
+                log::error!("No network provided");
+                return Error::response("No network provided");
+            }
+        };
 
-        //log::info!("VPN endpoint: {endpoint}");
-        let socket_addr = SocketAddr::from(([127, 0, 0, 1], 52001));
-        let new_endpoint = ContainerEndpoint::UdpDatagram(socket_addr);
-        self.vpn = Some(new_endpoint.clone());
+        let yagna_net_ip = match Ipv4Addr::from_str(network.if_addr.as_str()) {
+            Ok(ip) => ip,
+            Err(err) => {
+                log::error!("Error when parsing network ipaddr {err:?}");
+                return Error::response(format!("Error when parsing network ipaddr {err:?}"));
+            }
+        };
+        let _yagna_net_mask = match Ipv4Addr::from_str(network.mask.as_str()) {
+            Ok(mask) => {
+                if mask != Ipv4Addr::new(255, 255, 255, 0) {
+                    log::error!("255.255.255.0 mask is supported right now");
+                    return Error::response("255.255.255.0 mask is supported right now");
+                }
+                mask
+            }
+            Err(err) => {
+                log::error!("Error when parsing network mask {err:?}");
+                return Error::response(format!("Error when parsing network mask {err:?}"));
+            }
+        };
+        let yagna_net_addr = match Ipv4Addr::from_str(network.addr.as_str()) {
+            Ok(addr) => addr,
+            Err(err) => {
+                log::error!("Error when parsing network addr {err:?}");
 
-        let vpn_subnet_info = generate_interface_subnet_and_name(7).unwrap();
-        self.vpn_subnet_info = Some(vpn_subnet_info.clone());
+                return Error::response(format!("Error when parsing network addr {err:?}"));
+            }
+        };
+
+        let vpn_subnet_info = match generate_interface_subnet_and_name(yagna_net_ip.octets()[3]) {
+            Ok(vpn_subnet_info) => vpn_subnet_info,
+            Err(err) => {
+                return Error::response(format!(
+                    "Error when generating interface subnet and name {err:?}"
+                ))
+            }
+        };
 
         log::info!("VPN subnet: {vpn_subnet_info:?}");
 
         let tun_config = create_vpn_config(&vpn_subnet_info);
-        let _echo_server = false;
-
         let ip_rules_to_remove_ext = self.rules_to_remove.clone();
-        let yagna_subnet = Ipv4Addr::from_str("192.168.8.0").unwrap();
-
         // TODO: I'm returning here the same endpoint, that I got from ExeUnit.
         //       In reality I should start listening on the same protocol as ExeUnit
         //       Requested and return my endpoint address here.
         let routing = self.routing.clone();
-        let endpoint = self.vpn.clone();
 
         let apply_ip_tables_rules = ctx.cli.runtime.apply_iptables_rules.unwrap_or_default();
+        let vpn_endpoint = match &self.vpn_endpoint {
+            Some(container_endpoint) => match container_endpoint {
+                ContainerEndpoint::UdpDatagram(udp_socket_addr) => {
+                    log::info!("Using UDP endpoint: {}", udp_socket_addr);
+                    udp_socket_addr.clone()
+                }
+                _ => {
+                    log::error!("Only UDP endpoint is supported");
+                    return Error::response("Only UDP endpoint is supported");
+                }
+            },
+            None => {
+                log::error!("No VPN endpoint provided");
+                return Error::response("No VPN endpoint provided");
+            }
+        };
+
         async move {
             //let tun =
-            let socket = Rc::new(UdpSocket::bind(socket_addr).await.unwrap());
+            let socket = Arc::new(UdpSocket::bind(("127.0.0.1", 0)).await.unwrap());
+            let endpoint = ContainerEndpoint::UdpDatagram(socket.local_addr().unwrap());
 
             log::info!("Listening on: {}", socket.local_addr().unwrap());
             let dev = tun::create_as_async(&tun_config).unwrap();
@@ -240,20 +268,10 @@ impl Runtime for OutboundGatewayRuntime {
             let (mut tun_write, mut tun_read) = dev.into_framed().split();
             //let r = Arc::new(socket);
             //let s = r.clone();
-            let (udp_socket_write_, mut rx_forward_to_socket) = mpsc::channel::<Vec<u8>>(1);
-            let (set_addr, mut rx_get_addr) = mpsc::channel::<SocketAddr>(1);
+            let (_udp_socket_write, _rx_forward_to_socket) = mpsc::channel::<Vec<u8>>(1);
 
             let socket_ = socket.clone();
-            spawn_local(async move {
-                let addr = rx_get_addr.recv().await.unwrap();
-                while let Some(bytes) = rx_forward_to_socket.recv().await {
-                    log::trace!("Sending {:?} bytes to {:?}", bytes, addr);
-                    let _len = socket_.send_to(&bytes, &addr).await.unwrap();
-                }
-            });
-            let _socket_ = socket.clone();
-            let udp_socket_write = udp_socket_write_.clone();
-            spawn_local(async move {
+            tokio::spawn(async move {
                 loop {
                     if let Some(Ok(packet)) = tun_read.next().await {
                         //todo: add mac addresses
@@ -262,11 +280,17 @@ impl Runtime for OutboundGatewayRuntime {
                             None,
                             None,
                             Some(&vpn_subnet_info.subnet.octets()),
-                            Some(&yagna_subnet.octets()),
+                            Some(&yagna_net_addr.octets()),
                         ) {
                             Ok(ether_packet) => {
-                                if let Err(err) = udp_socket_write.send(ether_packet).await {
-                                    log::error!("Error sending packet: {:?}", err);
+                                if let Err(err) =
+                                    socket_.send_to(&ether_packet, &vpn_endpoint).await
+                                {
+                                    log::error!(
+                                        "Error sending packet to udp endpoint {}: {:?}",
+                                        &vpn_endpoint,
+                                        err
+                                    );
                                 }
                             }
                             Err(e) => {
@@ -276,23 +300,18 @@ impl Runtime for OutboundGatewayRuntime {
                     }
                 }
             });
-            let _udp_socket_write = udp_socket_write_;
 
-            spawn_local(async move {
-                let mut buf_box = Box::new([0; 70000]); //sufficient to hold max UDP packet
+            tokio::spawn(async move {
+                const MAX_PACKET_SIZE: usize = 65535;
+                let mut buf_box = Box::new([0; MAX_PACKET_SIZE]); //sufficient to hold jumbo frames (probably around 9000)
                 let buf = &mut *buf_box;
-                let mut is_addr_sent = false;
                 loop {
                     let (len, addr) = socket.recv_from(buf).await.unwrap();
                     log::trace!("{len:?} bytes received from {addr:?}");
                     log::trace!("Packet content {:?}", &buf[..len]);
-                    if !is_addr_sent {
-                        set_addr.send(addr).await.unwrap();
-                        is_addr_sent = true;
-                    }
                     match packet_ether_to_ip_slice(
                         &mut buf[..len],
-                        Some(&yagna_subnet.octets()),
+                        Some(&yagna_net_addr.octets()),
                         Some(&vpn_subnet_info.subnet.octets()),
                     ) {
                         Ok(ip_slice) => {
@@ -309,10 +328,8 @@ impl Runtime for OutboundGatewayRuntime {
                     }
                 }
             });
-            routing.update_network(network).await?;
-            endpoint.ok_or_else(|| {
-                Error::from_string("VPN ExeUnit - Runtime communication endpoint not set")
-            })
+            routing.update_network(create_network).await?;
+            Ok(endpoint)
 
             //endpoint.connect(cep).await?;
             /*Ok(Some(serde_json::json!({

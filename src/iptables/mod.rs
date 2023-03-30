@@ -156,7 +156,7 @@ pub struct SubnetIpv4Info {
     pub mask: Ipv4Addr,
     pub node_ip: Ipv4Addr,
     pub interface_name: String,
-    pub mtu: u16
+    pub mtu: u16,
 }
 
 pub fn generate_interface_subnet_and_name(ip_suffix: u8) -> std::io::Result<SubnetIpv4Info> {
@@ -204,7 +204,7 @@ pub fn generate_interface_subnet_and_name(ip_suffix: u8) -> std::io::Result<Subn
             mask: Ipv4Addr::from_str(&mask).expect("Cannot fail, invalid ip address"),
             interface_name: device_name,
             node_ip: Ipv4Addr::from_str(&node_ip).expect("Cannot fail, invalid ip address"),
-            mtu: 1200 //todo: get this from config?
+            mtu: 1200, //todo: get this from config?
         };
         break si;
     };
