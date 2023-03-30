@@ -27,13 +27,13 @@ pub struct GatewayCli {
     /// VPN endpoint address
     #[structopt(long)]
     vpn_endpoint: Option<Url>,
-
-    #[structopt(long)]
-    apply_iptables_rules: Option<bool>,
 }
 
 #[derive(Default, Deserialize, Serialize)]
-pub struct GatewayConf {}
+pub struct GatewayConf {
+    pub outbound_interface: String,
+    pub apply_iptables_rules: bool,
+}
 
 #[derive(Default, RuntimeDef, Clone)]
 #[cli(GatewayCli)]
@@ -228,7 +228,6 @@ impl Runtime for OutboundGatewayRuntime {
         //       Requested and return my endpoint address here.
         let routing = self.routing.clone();
 
-        let apply_ip_tables_rules = ctx.cli.runtime.apply_iptables_rules.unwrap_or_default();
         let vpn_endpoint = match &self.vpn_endpoint {
             Some(container_endpoint) => match container_endpoint {
                 ContainerEndpoint::UdpDatagram(udp_socket_addr) => {
@@ -245,7 +244,8 @@ impl Runtime for OutboundGatewayRuntime {
                 return Error::response("No VPN endpoint provided");
             }
         };
-
+        let outbound_interface = ctx.conf.outbound_interface.clone();
+        let apply_ip_tables_rules = ctx.conf.apply_iptables_rules;
         async move {
             //let tun =
             let socket = Arc::new(UdpSocket::bind(("127.0.0.1", 0)).await.unwrap());
@@ -258,7 +258,7 @@ impl Runtime for OutboundGatewayRuntime {
             //TODO: use when rules will be needed
             if apply_ip_tables_rules {
                 let ip_rules_to_remove =
-                    iptables_route_to_interface("eth0", &vpn_subnet_info.interface_name).unwrap();
+                    iptables_route_to_interface(&outbound_interface, &vpn_subnet_info.interface_name).unwrap();
                 {
                     //use this method due to runtime issues
                     *ip_rules_to_remove_ext.lock().await = ip_rules_to_remove;
