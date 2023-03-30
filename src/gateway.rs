@@ -29,7 +29,7 @@ pub struct GatewayCli {
     vpn_endpoint: Option<Url>,
 }
 
-#[derive(Default, Deserialize, Serialize)]
+#[derive(Debug, Default, Deserialize, Serialize)]
 pub struct GatewayConf {
     pub outbound_interface: String,
     pub apply_iptables_rules: bool,
@@ -46,6 +46,7 @@ pub struct OutboundGatewayRuntime {
 
 impl Runtime for OutboundGatewayRuntime {
     fn deploy<'a>(&mut self, ctx: &mut Context<Self>) -> OutputResponse<'a> {
+        //logs from here are not yet visible in exe unit logs
         log::info!(
             "Running `Deploy` command. Vpn endpoint: {:?}",
             ctx.cli.runtime.vpn_endpoint
@@ -66,7 +67,8 @@ impl Runtime for OutboundGatewayRuntime {
     }
 
     fn start<'a>(&mut self, ctx: &mut Context<Self>) -> OutputResponse<'a> {
-        log::info!("Running `Start` command");
+        //these logs seems to be visible in proper folder
+        log::info!("Running `Start` command. Vpn endpoint: {:?}. Outbound configuration {:?}", ctx.cli.runtime.vpn_endpoint, ctx.conf);
 
         let _emitter = ctx
             .emitter
@@ -74,8 +76,6 @@ impl Runtime for OutboundGatewayRuntime {
             .expect("Service not running in Server mode");
 
         let _workdir = ctx.cli.workdir.clone().expect("Workdir not provided");
-
-        log::debug!("VPN endpoint: {:?}", ctx.cli.runtime.vpn_endpoint);
 
         self.vpn_endpoint = match ctx
             .cli
@@ -154,7 +154,7 @@ impl Runtime for OutboundGatewayRuntime {
         async move {
             Ok(Some(serde_json::json!({
                 "properties": {
-                    "golem.runtime.capabilities": ["vpn", "gateway"]
+                    "golem.runtime.capabilities": ["vpn", "outbound"]
                 },
                 "constraints": ""
             })))
